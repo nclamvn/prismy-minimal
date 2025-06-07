@@ -295,7 +295,7 @@ export class TranslationService {
    */
   private reassembleTranslation(chunks: TranslatedChunk[]): string {
     // Sort by index to ensure correct order
-    const sorted = chunks.sort((a, b) => a.originalChunk.index - b.originalChunk.index)
+    const sorted = chunks.sort((a, b) => (a.originalChunk.index ?? 0) - (b.originalChunk.index ?? 0))
     
     // Join with appropriate spacing
     return sorted

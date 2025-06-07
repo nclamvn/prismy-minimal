@@ -27,7 +27,7 @@ function countTokens(text: string): number {
   // Add to cache with size limit
   if (tokenCountCache.size >= MAX_CACHE_SIZE) {
     const firstKey = tokenCountCache.keys().next().value
-    tokenCountCache.delete(firstKey)
+    tokenCountCache.delete(firstKey!)
   }
   tokenCountCache.set(text, count)
   
@@ -142,7 +142,7 @@ export class FixedDNAExtractor {
     chunk.metadata.dna = dna
   }
   
-  private extractTopics(normalizedText: string): string[] {
+  protected extractTopics(normalizedText: string): string[] {
     const words = normalizedText.split(/\W+/).filter(w => w.length > 4)
     const freq: Record<string, number> = {}
     
@@ -158,7 +158,7 @@ export class FixedDNAExtractor {
       .map(([word]) => word)
   }
   
-  private extractEntities(text: string): string[] {
+  protected extractEntities(text: string): string[] {
     // Single regex pass
     const entityPattern = /\b([A-Z][a-zA-Z'ʼ']+(?:\s+[A-Z][a-zA-Z'ʼ']+)*|[A-Z]{2,})\b/g
     const matches = text.match(entityPattern) || []
@@ -168,7 +168,7 @@ export class FixedDNAExtractor {
     return entities.slice(0, 10)
   }
   
-  private analyzeSentiment(normalizedText: string): number {
+  protected analyzeSentiment(normalizedText: string): number {
     // Single regex for all sentiment words
     const sentimentWords = normalizedText.match(
       /\b(good|great|excellent|amazing|wonderful|fantastic|love|best|bad|poor|terrible|awful|worst|hate|horrible|disappointing)\b/g
@@ -182,7 +182,7 @@ export class FixedDNAExtractor {
     return positive / sentimentWords.length
   }
   
-  private detectStyle(normalizedText: string): 'technical' | 'narrative' | 'academic' | 'general' {
+  protected detectStyle(normalizedText: string): 'technical' | 'narrative' | 'academic' | 'general' {
     // Check patterns in order of specificity
     if (/\b(algorithm|function|code|implementation|api|database|server|client|debug|compile)\b/.test(normalizedText)) {
       return 'technical'
@@ -196,7 +196,7 @@ export class FixedDNAExtractor {
     return 'general'
   }
   
-  private hasTable(text: string): boolean {
+  protected hasTable(text: string): boolean {
     const lines = text.split('\n')
     let tableLineCount = 0
     
@@ -210,16 +210,16 @@ export class FixedDNAExtractor {
     return false
   }
   
-  private hasFigure(normalizedText: string): boolean {
+  protected hasFigure(normalizedText: string): boolean {
     return /\b(figure|image|diagram|chart|graph|illustration|screenshot|fig\.|img)\b/.test(normalizedText)
   }
   
-  private hasCode(text: string): boolean {
+  protected hasCode(text: string): boolean {
     return /```[\s\S]*```/.test(text) || 
            /\b(function|class|const|let|var|import|export|def|return)\s*[({=]/.test(text)
   }
   
-  private extractReferences(text: string): string[] {
+  protected extractReferences(text: string): string[] {
     const refs = new Set<string>()
     
     // Extract all reference patterns
@@ -236,7 +236,7 @@ export class FixedDNAExtractor {
     return Array.from(refs).slice(0, 20)
   }
   
-  private detectLanguage(text: string): string {
+  protected detectLanguage(text: string): string {
     // Quick checks for common languages
     if (/[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(text)) return 'vi'
     if (/[\u4e00-\u9fa5]/.test(text)) return 'zh'
@@ -245,7 +245,7 @@ export class FixedDNAExtractor {
     return 'en'
   }
   
-  private calculateComplexity(text: string, normalizedText: string): number {
+  protected calculateComplexity(text: string, normalizedText: string): number {
     const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0)
     const words = normalizedText.split(/\s+/).filter(w => w.length > 0)
     
@@ -292,7 +292,7 @@ export class SmartFixedChunkingStrategy extends BaseChunkingStrategy {
       return []
     }
     
-    if (opts.overlap >= opts.maxTokens) {
+    if (opts.overlap !== undefined && opts.overlap >= opts.maxTokens) {
       throw new Error('Overlap must be less than maxTokens')
     }
     
@@ -330,7 +330,7 @@ export class SmartFixedChunkingStrategy extends BaseChunkingStrategy {
     return chunks
   }
   
-  private chunkSection(
+  protected chunkSection(
     section: string,
     sectionIdx: number,
     startOffset: number,
@@ -396,7 +396,7 @@ export class SmartFixedChunkingStrategy extends BaseChunkingStrategy {
     return chunks
   }
   
-  private createChunk(
+  protected createChunk(
     content: string,
     sectionIdx: number,
     localIdx: number,
@@ -419,7 +419,7 @@ export class SmartFixedChunkingStrategy extends BaseChunkingStrategy {
     }
   }
   
-  private detectLanguage(text: string): string {
+  protected detectLanguage(text: string): string {
     if (/[\u4e00-\u9fa5]/.test(text)) return 'zh'
     if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) return 'ja'
     if (/[\uac00-\ud7af]/.test(text)) return 'ko'
@@ -427,7 +427,7 @@ export class SmartFixedChunkingStrategy extends BaseChunkingStrategy {
     return 'en'
   }
   
-  private getCharsPerToken(language: string): number {
+  protected getCharsPerToken(language: string): number {
     const ratios: Record<string, number> = {
       en: 4.5,
       vi: 1.3,
@@ -438,7 +438,7 @@ export class SmartFixedChunkingStrategy extends BaseChunkingStrategy {
     return ratios[language] || 4
   }
   
-  private findWordBoundary(text: string, position: number): number {
+  protected findWordBoundary(text: string, position: number): number {
     // Look for space within 50 chars
     for (let offset = 0; offset < 50; offset++) {
       // Check forward
@@ -453,7 +453,7 @@ export class SmartFixedChunkingStrategy extends BaseChunkingStrategy {
     return position
   }
   
-  private linkChunks(chunks: Chunk[]): void {
+  protected linkChunks(chunks: Chunk[]): void {
     for (let i = 0; i < chunks.length; i++) {
       chunks[i].metadata = chunks[i].metadata || {}
       

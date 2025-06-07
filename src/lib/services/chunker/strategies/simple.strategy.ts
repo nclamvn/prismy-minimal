@@ -5,8 +5,8 @@ import { nanoid } from 'nanoid'
 export class SimpleStrategy extends BaseChunkingStrategy {
   async chunk(text: string, options: ChunkOptions): Promise<Chunk[]> {
     const chunks: Chunk[] = []
-    const chunkSize = options.maxTokens * 4 // Rough estimate: 1 token ≈ 4 chars
-    const overlap = options.overlap * 4
+    const chunkSize = (options.maxTokens ?? 1000) * 4 // Rough estimate: 1 token ≈ 4 chars
+    const overlap = (options.overlap ?? 100) * 4
     
     let position = 0
     let index = 0

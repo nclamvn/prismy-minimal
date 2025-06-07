@@ -86,7 +86,7 @@ export class DNAExtractor {
     chunk.metadata.dna = dna
   }
 
-  private extractTopics(text: string): string[] {
+  protected extractTopics(text: string): string[] {
     const words = text.toLowerCase().split(/\W+/).filter(w => w.length > 4)
     const freq: Record<string, number> = {}
     
@@ -102,13 +102,13 @@ export class DNAExtractor {
       .map(([word]) => word)
   }
 
-  private extractEntities(text: string): string[] {
+  protected extractEntities(text: string): string[] {
     const pattern = /[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*/g
     const entities = text.match(pattern) || []
     return [...new Set(entities)].slice(0, 10)
   }
 
-  private analyzeSentiment(text: string): number {
+  protected analyzeSentiment(text: string): number {
     const positiveWords = /\b(good|great|excellent|amazing|wonderful|fantastic|love|best)\b/gi
     const negativeWords = /\b(bad|poor|terrible|awful|worst|hate|horrible|disappointing)\b/gi
     
@@ -119,7 +119,7 @@ export class DNAExtractor {
     return positive / (positive + negative)
   }
 
-  private detectStyle(text: string): 'technical' | 'narrative' | 'academic' | 'general' {
+  protected detectStyle(text: string): 'technical' | 'narrative' | 'academic' | 'general' {
     if (/\b(algorithm|function|code|implementation|API|database)\b/i.test(text)) {
       return 'technical'
     }
@@ -132,19 +132,19 @@ export class DNAExtractor {
     return 'general'
   }
 
-  private hasTable(text: string): boolean {
+  protected hasTable(text: string): boolean {
     return /\|.*\|/.test(text) || /\t.*\t/.test(text)
   }
 
-  private hasFigure(text: string): boolean {
+  protected hasFigure(text: string): boolean {
     return /\b(figure|image|diagram|chart|graph|illustration|screenshot)\b/i.test(text)
   }
 
-  private hasCode(text: string): boolean {
+  protected hasCode(text: string): boolean {
     return /```[\s\S]*```/.test(text) || /\b(function|class|const|let|var|import|export)\b/.test(text)
   }
 
-  private extractReferences(text: string): string[] {
+  protected extractReferences(text: string): string[] {
     const patterns = [
       /\[[0-9]+\]/g,  // [1], [2], etc.
       /\([A-Z][a-z]+(?:\s+et\s+al\.)?,\s*[0-9]{4}\)/g  // (Smith, 2020), (Jones et al., 2019)
@@ -159,7 +159,7 @@ export class DNAExtractor {
     return [...new Set(refs)]
   }
 
-  private detectLanguage(text: string): string {
+  protected detectLanguage(text: string): string {
     if (/[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(text)) {
       return 'vi'
     }
@@ -169,7 +169,7 @@ export class DNAExtractor {
     return 'en'
   }
 
-  private calculateComplexity(text: string): number {
+  protected calculateComplexity(text: string): number {
     const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0)
     const words = text.split(/\s+/).filter(w => w.length > 0)
     
@@ -186,7 +186,7 @@ export class DNAExtractor {
     return Math.round(sentenceComplexity + lexicalComplexity)
   }
 
-  private isCommonWord(word: string): boolean {
+  protected isCommonWord(word: string): boolean {
     const common = ['the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 
                     'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you',
                     'do', 'at', 'this', 'but', 'his', 'by', 'from', 'they']
@@ -287,7 +287,7 @@ export class SmartChunkingStrategy extends BaseChunkingStrategy {
     return chunks
   }
 
-  private chunkSection(
+  protected chunkSection(
     section: string,
     sectionIdx: number,
     startOffset: number,
@@ -363,7 +363,7 @@ export class SmartChunkingStrategy extends BaseChunkingStrategy {
     return chunks
   }
 
-  private createChunk(
+  protected createChunk(
     content: string,
     sectionIdx: number,
     localIdx: number,
@@ -389,7 +389,7 @@ export class SmartChunkingStrategy extends BaseChunkingStrategy {
     }
   }
 
-  private calculateCharOffset(
+  protected calculateCharOffset(
     tokenPosition: number,
     totalTokens: number,
     textLength: number
@@ -399,7 +399,7 @@ export class SmartChunkingStrategy extends BaseChunkingStrategy {
     return Math.floor(textLength * ratio)
   }
 
-  private linkChunks(chunks: Chunk[]): void {
+  protected linkChunks(chunks: Chunk[]): void {
     for (let i = 0; i < chunks.length; i++) {
       chunks[i].metadata = chunks[i].metadata || {}
       

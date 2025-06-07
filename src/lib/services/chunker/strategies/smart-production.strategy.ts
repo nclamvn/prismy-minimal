@@ -19,7 +19,7 @@ function debugLog(...args: any[]) {
 let encoder: Tiktoken | null = null
 
 function getEncoder(): Tiktoken {
-  if (encoder) return encoder
+  if (encoder) return encoder!
   
   // Set WASM path using entry point (not package.json)
   if (!process.env.TIKTOKEN_WASM) {
@@ -36,7 +36,7 @@ function getEncoder(): Tiktoken {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { encoding_for_model } = require('@dqbd/tiktoken')
   encoder = encoding_for_model('cl100k_base')
-  return encoder
+  return encoder!
 }
 
 // Constants
@@ -143,7 +143,7 @@ export class ProductionDNAExtractor {
     chunk.metadata.dna = dna
   }
   
-  private detectLanguage(text: string): string {
+  protected detectLanguage(text: string): string {
     if (/[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễ]/i.test(text)) return 'vi'
     if (/[\u4e00-\u9fa5]/.test(text)) return 'zh'
     if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) return 'ja'
@@ -151,14 +151,14 @@ export class ProductionDNAExtractor {
     return 'en'
   }
   
-  private detectStyle(normalized: string): string {
+  protected detectStyle(normalized: string): string {
     if (/\b(function|class|api|code|debug)\b/.test(normalized)) return 'technical'
     if (/\b(research|study|hypothesis|findings)\b/.test(normalized)) return 'academic'
     if (/\b(story|character|plot|dialogue)\b/.test(normalized)) return 'narrative'
     return 'general'
   }
   
-  private hasTable(text: string): boolean {
+  protected hasTable(text: string): boolean {
     const lines = text.split('\n')
     let pipeLines = 0
     for (const line of lines) {
@@ -179,14 +179,13 @@ export class SmartProductionStrategy extends BaseChunkingStrategy {
   async chunk(text: string, options: ChunkOptions): Promise<Chunk[]> {
     const opts: SmartChunkOptions = {
       maxTokens: options.maxTokens || DEFAULT_MAX_TOKENS,
-      overlap: options.overlap || DEFAULT_OVERLAP,
+      overlap: options.overlap ?? DEFAULT_OVERLAP,
       preserveStructure: options.preserveStructure ?? true,
       generateDNA: options.generateDNA ?? false,
       sectionTargetTokens: DEFAULT_SECTION_TOKENS,
       concurrencyLimit: 8,
       stripContentAfterDNA: false,
       debug: false,
-      ...options
     }
     
     // Critical validation
@@ -248,7 +247,7 @@ export class SmartProductionStrategy extends BaseChunkingStrategy {
     return chunks
   }
   
-  private chunkSection(
+  protected chunkSection(
     section: string,
     sectionIdx: number,
     startOffset: number,
@@ -374,7 +373,7 @@ export class SmartProductionStrategy extends BaseChunkingStrategy {
     return chunks
   }
   
-  private createChunk(
+  protected createChunk(
     content: string,
     sectionIdx: number,
     localIdx: number,
@@ -396,7 +395,7 @@ export class SmartProductionStrategy extends BaseChunkingStrategy {
     }
   }
   
-  private linkChunks(chunks: Chunk[]): void {
+  protected linkChunks(chunks: Chunk[]): void {
     for (let i = 0; i < chunks.length; i++) {
       chunks[i].metadata = chunks[i].metadata || {}
       if (i > 0) {
@@ -408,7 +407,7 @@ export class SmartProductionStrategy extends BaseChunkingStrategy {
     }
   }
   
-  private logMemory(label: string): void {
+  protected logMemory(label: string): void {
     if (DEBUG) {
       const mem = process.memoryUsage()
       console.log(`[Memory] ${label}: Heap ${Math.round(mem.heapUsed / 1024 / 1024)}MB, RSS ${Math.round(mem.rss / 1024 / 1024)}MB`)

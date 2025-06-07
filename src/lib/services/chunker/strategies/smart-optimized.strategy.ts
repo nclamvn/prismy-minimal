@@ -120,7 +120,7 @@ export class OptimizedDNAExtractor {
     chunk.metadata.dna = dna
   }
   
-  private extractTopics(normalizedText: string): string[] {
+  protected extractTopics(normalizedText: string): string[] {
     const words = normalizedText.split(/\W+/).filter(w => w.length > 4)
     const freq: Record<string, number> = {}
     
@@ -141,7 +141,7 @@ export class OptimizedDNAExtractor {
       .map(([word]) => word)
   }
   
-  private extractEntities(text: string): string[] {
+  protected extractEntities(text: string): string[] {
     // Improved regex for various name patterns
     const patterns = [
       /\b[A-Z][a-zA-Z'ʼ']+(?:\s+[A-Z][a-zA-Z'ʼ']+)*\b/g, // English names
@@ -157,7 +157,7 @@ export class OptimizedDNAExtractor {
     return Array.from(entities).slice(0, 10)
   }
   
-  private analyzeSentiment(normalizedText: string): number {
+  protected analyzeSentiment(normalizedText: string): number {
     // Optimized with single regex pass
     const sentimentPattern = /\b(good|great|excellent|amazing|wonderful|fantastic|love|best|bad|poor|terrible|awful|worst|hate|horrible|disappointing)\b/g
     const matches = normalizedText.match(sentimentPattern) || []
@@ -171,7 +171,7 @@ export class OptimizedDNAExtractor {
     return positive / matches.length
   }
   
-  private detectStyle(normalizedText: string): 'technical' | 'narrative' | 'academic' | 'general' {
+  protected detectStyle(normalizedText: string): 'technical' | 'narrative' | 'academic' | 'general' {
     // Combined regex for efficiency
     const patterns = {
       technical: /\b(algorithm|function|code|implementation|api|database|server|client)\b/,
@@ -187,7 +187,7 @@ export class OptimizedDNAExtractor {
     return 'general'
   }
   
-  private hasTable(text: string): boolean {
+  protected hasTable(text: string): boolean {
     // More robust table detection
     const lines = text.split('\n')
     let pipeCount = 0
@@ -206,16 +206,16 @@ export class OptimizedDNAExtractor {
     return pipeCount >= 2 && consistentPipes >= 1
   }
   
-  private hasFigure(normalizedText: string): boolean {
+  protected hasFigure(normalizedText: string): boolean {
     return /\b(figure|image|diagram|chart|graph|illustration|screenshot|fig\.|img)\b/.test(normalizedText)
   }
   
-  private hasCode(text: string): boolean {
+  protected hasCode(text: string): boolean {
     return /```[\s\S]*```/.test(text) || 
            /\b(function|class|const|let|var|import|export|def|return)\b/.test(text)
   }
   
-  private extractReferences(text: string): string[] {
+  protected extractReferences(text: string): string[] {
     const refs = new Set<string>()
     
     // Numeric references [1], [2]
@@ -229,7 +229,7 @@ export class OptimizedDNAExtractor {
     return Array.from(refs).slice(0, 20)
   }
   
-  private detectLanguage(text: string): string {
+  protected detectLanguage(text: string): string {
     // Quick language detection
     const patterns = {
       vi: /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i,
@@ -244,7 +244,7 @@ export class OptimizedDNAExtractor {
     return 'en'
   }
   
-  private calculateComplexity(text: string): number {
+  protected calculateComplexity(text: string): number {
     const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0)
     const words = text.split(/\s+/).filter(w => w.length > 0)
     
@@ -299,7 +299,7 @@ export class SmartOptimizedChunkingStrategy extends BaseChunkingStrategy {
     if (tokenCountCache.size >= MAX_CACHE_SIZE) {
       // Remove oldest entries (simple FIFO)
       const firstKey = tokenCountCache.keys().next().value
-      tokenCountCache.delete(firstKey)
+      tokenCountCache.delete(firstKey!)
     }
     tokenCountCache.set(text, count)
     
@@ -324,7 +324,7 @@ export class SmartOptimizedChunkingStrategy extends BaseChunkingStrategy {
     }
     
     // Validate options
-    if (opts.overlap >= opts.maxTokens) {
+    if (opts.overlap !== undefined && opts.overlap >= opts.maxTokens) {
       throw new Error('Overlap must be less than maxTokens')
     }
     
@@ -363,7 +363,7 @@ export class SmartOptimizedChunkingStrategy extends BaseChunkingStrategy {
     return chunks
   }
   
-  private chunkSection(
+  protected chunkSection(
     section: string,
     sectionIdx: number,
     startOffset: number,
@@ -426,7 +426,7 @@ export class SmartOptimizedChunkingStrategy extends BaseChunkingStrategy {
     return chunks
   }
   
-  private createChunk(
+  protected createChunk(
     content: string,
     sectionIdx: number,
     localIdx: number,
@@ -450,7 +450,7 @@ export class SmartOptimizedChunkingStrategy extends BaseChunkingStrategy {
     }
   }
   
-  private detectLanguage(text: string): string {
+  protected detectLanguage(text: string): string {
     // Quick language detection for char/token ratio
     if (/[\u4e00-\u9fa5]/.test(text)) return 'zh'
     if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) return 'ja'
@@ -459,7 +459,7 @@ export class SmartOptimizedChunkingStrategy extends BaseChunkingStrategy {
     return 'en'
   }
   
-  private getCharsPerToken(language: string): number {
+  protected getCharsPerToken(language: string): number {
     // Empirical values from testing
     const ratios = {
       en: 4.5,
@@ -468,10 +468,10 @@ export class SmartOptimizedChunkingStrategy extends BaseChunkingStrategy {
       ja: 0.7,
       ko: 0.8
     }
-    return ratios[language] || 4
+    return ratios[language as keyof typeof ratios] || 4
   }
   
-  private findWordBoundary(text: string, position: number): number {
+  protected findWordBoundary(text: string, position: number): number {
     // Try to find space within 50 chars
     const searchRange = 50
     const start = Math.max(0, position - searchRange)
@@ -497,7 +497,7 @@ export class SmartOptimizedChunkingStrategy extends BaseChunkingStrategy {
     return bestPos
   }
   
-  private linkChunks(chunks: Chunk[]): void {
+  protected linkChunks(chunks: Chunk[]): void {
     for (let i = 0; i < chunks.length; i++) {
       chunks[i].metadata = chunks[i].metadata || {}
       

@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid'
 export class BasicStrategy extends BaseChunkingStrategy {
   async chunk(text: string, options: ChunkOptions): Promise<Chunk[]> {
     const chunks: Chunk[] = []
-    const chunkSize = options.maxTokens * 4 // Rough estimate
+    const chunkSize = (options.maxTokens ?? 1000) * 4 // Rough estimate
     
     let position = 0
     let index = 0
