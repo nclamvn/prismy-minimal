@@ -1,0 +1,118 @@
+import { NextRequest, NextResponse } from 'next/server'
+import OpenAI from 'openai'
+import { ChunkerService } from '@/lib/services/chunker/chunker.service'
+import type { ChunkingTier } from '@/lib/services/chunker/chunker.service'
+import type { Chunk } from '@/lib/services/chunker/types/index'
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || '',
+})
+
+const chunkerService = new ChunkerService()
+
+const LANG_MAP: Record<string, string> = {
+  vi: 'Vietnamese',
+  en: 'English',
+  zh: 'Chinese (Simplified)',
+  ja: 'Japanese',
+  ko: 'Korean',
+  fr: 'French',  
+  es: 'Spanish',
+  de: 'German',
+}
+
+async function translateChunk(
+  chunk: Chunk,
+  targetLanguage: string,
+  model: string,
+  chunkIndex: number,
+  totalChunks: number
+): Promise<string> {
+  const completion = await openai.chat.completions.create({
+    model,
+    messages: [
+      {
+        role: 'system',
+        content: totalChunks > 1 
+          ? `Translate to ${targetLanguage}. This is part ${chunkIndex + 1} of ${totalChunks}. Maintain consistency. Return only translation.`
+          : `Translate to ${targetLanguage}. Return only the translation.`
+      },
+      { role: 'user', content: chunk.content }
+    ],
+    temperature: 0.3,
+    max_tokens: Math.min(chunk.tokens * 3, 4000),
+  })
+  
+  return completion.choices[0]?.message?.content?.trim() || ''
+}
+export async function POST(req: NextRequest) {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { success: false, error: 'Missing OpenAI API key' },
+        { status: 500 }
+      )
+    }
+
+    const body = await req.json()
+    const { text = '', targetLang = 'vi', tier = 'standard' } = body
+
+    if (!text.trim()) {
+      return NextResponse.json(
+        { success: false, error: 'Text is empty' },
+        { status: 400 }
+      )
+    }
+
+    const targetLanguage = LANG_MAP[targetLang] || 'Vietnamese'
+    const model = tier === 'premium' ? 'gpt-4' : 'gpt-3.5-turbo'
+    
+    console.log('=== Translation Request ===')
+    console.log('Target:', targetLanguage)
+    console.log('Text length:', text.length)
+    console.log('Tier:', tier)
+
+    // Use ChunkerService
+    const analysis = await chunkerService.analyzeDocument(text)
+    console.log('Document analysis:', analysis)
+    
+    const chunkingTier: ChunkingTier = tier as ChunkingTier
+    const chunkingResult = await chunkerService.chunkDocument(text, chunkingTier)
+    
+    console.log(`Created ${chunkingResult.chunks.length} chunks`)
+    
+    // Translate chunks
+    const translatedChunks: string[] = []
+    const chunks = chunkingResult.chunks
+    
+    for (let i = 0; i < chunks.length; i++) {
+      const translated = await translateChunk(
+        chunks[i],
+        targetLanguage,
+        model,
+        i,
+        chunks.length
+      )
+      translatedChunks.push(translated)
+    }
+    
+    const translated = translatedChunks.join('\n\n')
+    
+    return NextResponse.json({
+      success: true,
+      original: text,
+      translated,
+      targetLang,
+      model,
+      chunks: chunks.length,
+      totalTokens: chunkingResult.totalTokens
+    })
+
+  } catch (error: any) {
+    console.error('Translation Error:', error)
+    return NextResponse.json(
+      { success: false, error: error.message || 'Translation failed' },
+      { status: 500 }
+    )
+  }
+}

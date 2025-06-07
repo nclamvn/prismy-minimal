@@ -1,0 +1,278 @@
+import { NextResponse } from 'next/server'
+import OpenAI from 'openai'
+import { SimpleChunkerService } from '@/lib/services/simple-chunker'
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || '',
+})
+
+const chunkerService = new SimpleChunkerService()
+
+const LANG_MAP = {
+  vi: 'Vietnamese',
+  en: 'English',
+  zh: 'Chinese (Simplified)',
+  ja: 'Japanese',
+  ko: 'Korean',
+  fr: 'French',
+  es: 'Spanish',
+  de: 'German',
+}
+
+// Translate a single chunk with context
+async function translateChunk(
+  content: string,
+  targetLanguage: string,
+  model: string,
+  chunkIndex: number,
+  totalChunks: number,
+  previousContext?: string
+): Promise<string> {
+  let systemPrompt = ''
+  
+  if (totalChunks > 1) {
+    systemPrompt = `You are translating part ${chunkIndex + 1} of ${totalChunks} of a document. `
+    if (previousContext) {
+      systemPrompt += `Previous context: "${previousContext.slice(-200)}..." `
+    }
+    systemPrompt += `Translate to ${targetLanguage} maintaining consistency. Return only the translation.`
+  } else {
+    systemPrompt = `Translate to ${targetLanguage}. Return only the translation.`
+  }
+  
+  const completion = await openai.chat.completions.create({
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content }
+    ],
+    temperature: 0.3,
+    max_tokens: Math.min(content.length * 2, 4000),
+  })
+  
+  return completion.choices[0]?.message?.content || ''
+}
+
+export async function GET() {
+  return NextResponse.json({ 
+    message: "Prismy Translation API",
+    hasApiKey: !!process.env.OPENAI_API_KEY,
+    supportedLanguages: Object.keys(LANG_MAP),
+    tiers: ['basic', 'standard', 'premium'],
+    features: ['chunking', 'long-documents', 'context-preservation'],
+    limits: {
+      basic: '50,000 chars',
+      standard: '200,000 chars', 
+      premium: 'unlimited'
+    }
+  })
+}
+
+export async function POST(request: Request) {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { success: false, error: 'Missing OpenAI API key' },
+        { status: 500 }
+      )
+    }
+
+    const body = await request.json()
+    const { 
+      text = '', 
+      targetLang = 'vi', 
+      tier = 'standard',
+      useChunking = true 
+    } = body
+    
+    if (!text.trim()) {
+      return NextResponse.json(
+        { success: false, error: 'No text provided' },
+        { status: 400 }
+      )
+    }
+    
+    // Set limits based on tier
+    const charLimits = {
+      basic: 50000,
+      standard: 200000,
+      premium: 1000000 // 1M chars
+    }
+    
+    const limit = charLimits[tier] || charLimits.standard
+    
+    if (text.length > limit) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: `Text too long for ${tier} tier. Maximum ${limit.toLocaleString()} characters.` 
+        },
+        { status: 400 }
+      )
+    }
+    
+    const targetLanguage = LANG_MAP[targetLang] || 'Vietnamese'
+    const model = tier === 'premium' ? 'gpt-4' : 'gpt-3.5-turbo'
+    
+    console.log('=== Translation Request ===')
+    console.log('Text length:', text.length, 'chars')
+    console.log('Target:', targetLanguage)
+    console.log('Model:', model)
+    console.log('Tier:', tier)
+    
+    const startTime = Date.now()
+    
+    // Check if chunking needed
+    const needsChunking = useChunking && text.length > 3000
+    
+    if (!needsChunking) {
+      // Simple translation for short texts
+      console.log('Using simple translation (no chunking)')
+      
+      const systemPrompt = tier === 'premium' 
+        ? `You are a professional translator. Translate to ${targetLanguage} preserving tone and nuance. Return only translation.`
+        : `Translate to ${targetLanguage}. Return only the translation.`
+      
+      const completion = await openai.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: text }
+        ],
+        temperature: 0.3,
+        max_tokens: Math.min(text.length * 2, 4000),
+      })
+      
+      const translated = completion.choices[0]?.message?.content || ''
+      
+      return NextResponse.json({
+        success: true,
+        original: text,
+        translated,
+        targetLang,
+        model,
+        tier,
+        method: 'simple',
+        stats: {
+          originalLength: text.length,
+          translatedLength: translated.length,
+          processingTime: Date.now() - startTime,
+          chunks: 1
+        }
+      })
+    }
+    
+    // Use chunking for long texts
+    console.log('=== Using Chunking ===')
+    
+    // Determine chunk size based on tier
+    const maxTokensPerChunk = {
+      basic: 500,
+      standard: 1000,
+      premium: 1500
+    }[tier] || 1000
+    
+    // Create chunks
+    const chunks = chunkerService.chunkByParagraphs(text, maxTokensPerChunk)
+    console.log(`Created ${chunks.length} chunks`)
+    
+    // Log chunk info
+    chunks.forEach((chunk, i) => {
+      console.log(`Chunk ${i + 1}: ${chunk.tokens} tokens, ${chunk.content.length} chars`)
+    })
+    
+    // Translate chunks with context preservation
+    const translatedChunks: string[] = []
+    let previousContext = ''
+    
+    // Process in batches to avoid rate limits
+    const batchSize = tier === 'basic' ? 3 : tier === 'standard' ? 5 : 10
+    
+    for (let i = 0; i < chunks.length; i += batchSize) {
+      const batch = chunks.slice(i, Math.min(i + batchSize, chunks.length))
+      
+      console.log(`Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(chunks.length / batchSize)}`)
+      
+      const batchPromises = batch.map((chunk, batchIndex) => {
+        const globalIndex = i + batchIndex
+        return translateChunk(
+          chunk.content,
+          targetLanguage,
+          model,
+          globalIndex,
+          chunks.length,
+          previousContext
+        )
+      })
+      
+      const batchResults = await Promise.all(batchPromises)
+      translatedChunks.push(...batchResults)
+      
+      // Update context with last translated chunk
+      previousContext = batchResults[batchResults.length - 1] || ''
+      
+      // Rate limit delay
+      if (i + batchSize < chunks.length) {
+        const delay = tier === 'basic' ? 1000 : tier === 'standard' ? 500 : 200
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+    }
+    
+    // Join translated chunks
+    const translated = translatedChunks.join('\n\n')
+    
+    const processingTime = Date.now() - startTime
+    
+    console.log('=== Translation Complete ===')
+    console.log(`Processed ${chunks.length} chunks in ${processingTime}ms`)
+    console.log(`Original: ${text.length} chars`)
+    console.log(`Translated: ${translated.length} chars`)
+    
+    return NextResponse.json({
+      success: true,
+      original: text,
+      translated,
+      targetLang,
+      model,
+      tier,
+      method: 'chunked',
+      stats: {
+        originalLength: text.length,
+        translatedLength: translated.length,
+        processingTime,
+        chunks: chunks.length,
+        avgChunkSize: Math.round(text.length / chunks.length),
+        tokensProcessed: chunks.reduce((sum, c) => sum + c.tokens, 0)
+      }
+    })
+    
+  } catch (error: any) {
+    console.error('Translation error:', error.message)
+    
+    if (error.status === 401) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid API key' },
+        { status: 401 }
+      )
+    }
+    
+    if (error.status === 429) {
+      return NextResponse.json(
+        { success: false, error: 'Rate limit exceeded. Please try again later.' },
+        { status: 429 }
+      )
+    }
+    
+    if (error.code === 'context_length_exceeded') {
+      return NextResponse.json(
+        { success: false, error: 'Text chunk too long. Try using smaller chunks.' },
+        { status: 400 }
+      )
+    }
+    
+    return NextResponse.json({ 
+      success: false,
+      error: error.message || 'Translation failed' 
+    }, { status: 500 })
+  }
+}

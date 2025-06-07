@@ -1,0 +1,114 @@
+  const handleTranslate = async () => {
+    if (!input.trim()) return
+    
+    if (detectedLang === targetLang) {
+      setShowRewriteModal(true)
+      return
+    }
+    
+    setIsRewrite(false)
+    performTranslation()
+  }
+
+  const performTranslation = async (rewrite: boolean = false) => {
+    if (!input.trim()) return
+
+    setLoading(true)
+    setError('')
+    setResult(null)
+    setProgress(0)
+    setIsRewrite(rewrite)
+
+    const isLongText = input.length > 500
+    const progressInterval = setInterval(() => {
+      setProgress((prev) => {
+        if (prev >= 90) return 90
+        const increment = isLongText ? 1 : 2
+        return Math.min(90, Math.round(prev + increment))
+      })
+    }, 200)
+
+    try {
+      const controller = new AbortController()
+      const timeoutMs = input.length > 1500 ? 120000 : 60000
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+      const response = await fetch('/api/translate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: input,
+          targetLang: targetLang,
+          isRewrite: rewrite,
+          tier: 'standard'
+        }),
+        signal: controller.signal
+      })
+
+      clearTimeout(timeoutId)
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+      
+      if (data.success) {
+        setProgress(100)
+        
+        setTimeout(() => {
+          setResult(data)
+          setProgress(0)
+          setLoading(false)
+        }, 200)
+      } else {
+        console.error('Translation failed:', data)
+        clearInterval(progressInterval)
+        setError(data.error || t.translationFailed)
+        setProgress(0)
+        setLoading(false)
+      }
+    } catch (err: any) {
+      console.error('Translation error:', err)
+      clearInterval(progressInterval)
+      
+      if (err.name === 'AbortError') {
+        setError('Translation is taking too long. The text might be too complex. Try breaking it into smaller parts.')
+      } else if (err.message.includes('504')) {
+        setError('Server timeout. Please try with shorter text or break into paragraphs.')
+      } else if (err.message.includes('Failed to fetch')) {
+        setError('Network error. Please check your connection.')
+      } else {
+        setError(err.message || t.networkError || 'Translation failed')
+      }
+      
+      setProgress(0)
+      setLoading(false)
+    } finally {
+      if (progressInterval) {
+        clearInterval(progressInterval)
+      }
+    }
+  }
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    if (file.name.toLowerCase().endsWith('.pdf')) {
+      setError(t.pdfNotSupported)
+      return
+    }
+
+    const maxSize = 10 * 1024 * 1024
+    if (file.size > maxSize) {
+      setError(
+        interfaceLang === 'vi' 
+          ? `Kích thước file vượt quá 10MB. File của bạn: ${(file.size / 1024 / 1024).toFixed(1)}MB`
+          : `File size exceeds 10MB. Your file: ${(file.size / 1024 / 1024).toFixed(1)}MB`
+      )
+      return
+    }
+

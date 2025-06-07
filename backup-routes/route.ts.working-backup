@@ -1,0 +1,148 @@
+import { NextResponse } from 'next/server'
+import OpenAI from 'openai'
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || '',
+})
+
+const LANG_MAP = {
+  vi: 'Vietnamese',
+  en: 'English',
+  zh: 'Chinese (Simplified)',
+  ja: 'Japanese',
+  ko: 'Korean',
+  fr: 'French',
+  es: 'Spanish',
+  de: 'German',
+}
+
+export async function GET() {
+  return NextResponse.json({ 
+    message: "Translate API - Use POST",
+    hasApiKey: !!process.env.OPENAI_API_KEY,
+    supportedLanguages: Object.keys(LANG_MAP),
+    tiers: ['basic', 'standard', 'premium']
+  })
+}
+
+export async function POST(request: Request) {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { success: false, error: 'Missing OpenAI API key' },
+        { status: 500 }
+      )
+    }
+
+    const body = await request.json()
+    const { text = '', targetLang = 'vi', tier = 'standard', isRewrite = false } = body
+    
+    if (!text.trim()) {
+      return NextResponse.json(
+        { success: false, error: 'No text provided' },
+        { status: 400 }
+      )
+    }
+    
+    if (text.length > 10000) {
+      return NextResponse.json(
+        { success: false, error: 'Text too long. Maximum 10,000 characters.' },
+        { status: 400 }
+      )
+    }
+    
+    const targetLanguage = LANG_MAP[targetLang] || 'Vietnamese'
+    const model = tier === 'premium' ? 'gpt-4' : 'gpt-3.5-turbo'
+    
+    console.log('Translation request:', {
+      textLength: text.length,
+      targetLang: targetLanguage,
+      model,
+      tier,
+      isRewrite
+    })
+    
+    // Build system prompt based on tier
+    let systemPrompt = ''
+    let temperature = 0.3
+    
+    if (isRewrite) {
+      systemPrompt = `Rewrite this ${targetLanguage} text to be clearer and more natural. Return only the rewritten text.`
+      temperature = 0.7
+    } else {
+      switch (tier) {
+        case 'basic':
+          systemPrompt = `Translate to ${targetLanguage}. Return only the translation.`
+          break
+        case 'standard':
+          systemPrompt = `Translate to ${targetLanguage}. Maintain the original tone and style. Return only the translation.`
+          break
+        case 'premium':
+          systemPrompt = `You are a professional translator. Translate to ${targetLanguage} while preserving meaning, tone, style, and nuances. Ensure natural flow for native speakers. Return only the translation.`
+          temperature = 0.4
+          break
+        default:
+          systemPrompt = `Translate to ${targetLanguage}. Return only the translation.`
+      }
+    }
+    
+    const startTime = Date.now()
+    
+    const completion = await openai.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: text }
+      ],
+      temperature,
+      max_tokens: Math.min(text.length * 3, 4000),
+    })
+    
+    const translated = completion.choices[0]?.message?.content || ''
+    const processingTime = Date.now() - startTime
+    
+    return NextResponse.json({
+      success: true,
+      original: text,
+      translated,
+      targetLang,
+      model,
+      tier,
+      method: isRewrite ? 'rewrite' : 'translate',
+      stats: {
+        originalLength: text.length,
+        translatedLength: translated.length,
+        processingTime
+      }
+    })
+    
+  } catch (error: any) {
+    console.error('Translation error:', error.message)
+    
+    if (error.status === 401) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid API key' },
+        { status: 401 }
+      )
+    }
+    
+    if (error.status === 429) {
+      return NextResponse.json(
+        { success: false, error: 'Rate limit exceeded' },
+        { status: 429 }
+      )
+    }
+    
+    if (error.code === 'context_length_exceeded') {
+      return NextResponse.json(
+        { success: false, error: 'Text too long for model' },
+        { status: 400 }
+      )
+    }
+    
+    return NextResponse.json({ 
+      success: false,
+      error: error.message || 'Translation failed' 
+    }, { status: 500 })
+  }
+}

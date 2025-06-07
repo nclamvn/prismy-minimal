@@ -1,0 +1,455 @@
+// src/app/api/translate/route.ts
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+import { NextResponse } from 'next/server'
+import OpenAI from 'openai'
+import pLimit from 'p-limit'
+// Only import types to avoid bundling Node dependencies
+import type { ChunkerService, ChunkingTier } from '@/lib/services/chunker'
+
+// Types
+type TierName = 'basic' | 'standard' | 'premium'
+
+interface TierConfig {
+  model: string
+  maxChars: number
+  chunkingTier: ChunkingTier
+  temperature: number
+  batchSize: number
+  delay: number
+  maxRetries: number
+}
+
+export interface DNA {
+  style?: 'technical' | 'narrative' | 'academic' | 'general'
+  hasCode?: boolean
+  hasTable?: boolean
+  language?: string
+}
+
+// Constants
+const LANG_MAP = new Map<string, string>([
+  ['vi', 'Vietnamese'],
+  ['en', 'English'],
+  ['zh', 'Chinese (Simplified)'],
+  ['ja', 'Japanese'],
+  ['ko', 'Korean'],
+  ['fr', 'French'],
+  ['es', 'Spanish'],
+  ['de', 'German'],
+])
+
+const TIER_CONFIG: Record<TierName, TierConfig> = {
+  basic: {
+    model: 'gpt-3.5-turbo',
+    maxChars: 50_000,
+    chunkingTier: 'basic',
+    temperature: 0.3,
+    batchSize: 5,
+    delay: 200,
+    maxRetries: 3,
+  },
+  standard: {
+    model: 'gpt-4o',
+    maxChars: 200_000,
+    chunkingTier: 'standard',
+    temperature: 0.4,
+    batchSize: 3,
+    delay: 500,
+    maxRetries: 3,
+  },
+  premium: {
+    model: 'gpt-4o',
+    maxChars: 1_000_000,
+    chunkingTier: 'premium',
+    temperature: 0.4,
+    batchSize: 2,
+    delay: 8000,
+    maxRetries: 3,
+  },
+}
+
+// OpenAI instance
+const openai = new OpenAI({ 
+  apiKey: process.env.OPENAI_API_KEY || '',
+})
+
+// Utilities
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+function calculateDynamicDelay(
+  baseDelay: number,
+  progress: number,
+  tokensUsed: number
+): number {
+  const progressFactor = progress
+  const tokenFactor = Math.min(tokensUsed / 50000, 2)
+  return Math.floor(baseDelay * (1 + progressFactor * 0.5) * (1 + tokenFactor * 0.5))
+}
+
+// GET handler
+export async function GET() {
+  return NextResponse.json({
+    message: 'Prismy Translation API v2.0',
+    hasApiKey: !!process.env.OPENAI_API_KEY,
+    supportedLanguages: Array.from(LANG_MAP.keys()),
+    tiers: Object.keys(TIER_CONFIG),
+    features: [
+      'Smart chunking with GPT-3 encoder',
+      'DNA extraction for document analysis',
+      'Context preservation across chunks',
+      'Multi-tier quality levels',
+      'Rate limit protection with retry',
+      'Parallel processing with p-limit',
+    ],
+  })
+}
+
+// POST handler
+export async function POST(request: Request) {
+  const startTime = Date.now()
+
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { success: false, error: 'Missing OpenAI API key' },
+        { status: 500 }
+      )
+    }
+
+    const body = await request.json()
+    const {
+      text = '',
+      targetLang = 'vi',
+      tier = 'standard',
+      isRewrite = false,
+      generateDNA = true,
+      preserveFormatting = true,
+    } = body
+
+    // Validation
+    if (!text.trim()) {
+      return NextResponse.json(
+        { success: false, error: 'No text provided' },
+        { status: 400 }
+      )
+    }
+
+    const tierName = tier as TierName
+    const config = TIER_CONFIG[tierName] || TIER_CONFIG.standard
+
+    if (text.length > config.maxChars) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Text too long for ${tierName} tier. Maximum ${config.maxChars.toLocaleString()} characters.`,
+        },
+        { status: 400 }
+      )
+    }
+
+    const targetLanguage = LANG_MAP.get(targetLang) || 'Vietnamese'
+
+    console.log('=== Translation Request ===')
+    console.log(`Text length: ${text.length.toLocaleString()} chars`)
+    console.log(`Target: ${targetLanguage}`)
+    console.log(`Tier: ${tierName}`)
+    console.log(`Model: ${config.model}`)
+
+    // Dynamic import ChunkerService (Node-only dependencies)
+    const { ChunkerService } = await import('@/lib/services/chunker')
+    const chunkerService = new ChunkerService()
+
+    const { chunks, summary } = await chunkerService.chunkDocument(text, config.chunkingTier, {
+      generateDNA,
+      preserveStructure: preserveFormatting,
+      maxTokens: tierName === 'basic' ? 500 : tierName === 'standard' ? 1000 : 1500,
+      overlap: tierName === 'premium' ? 200 : 100,
+    })
+
+    console.log(`=== Chunking Complete ===`)
+    console.log(`Chunks created: ${chunks.length}`)
+    
+    // Null-safe handling of totalTokens
+    const totalTokens = summary?.totalTokens ?? chunks.reduce((sum, chunk) => sum + chunk.tokens, 0)
+    console.log(`Total tokens: ${totalTokens.toLocaleString()}`)
+
+    if (chunks.length === 0) {
+      throw new Error('No chunks created')
+    }
+
+    const systemPrompt = buildSystemPrompt({
+      tier: tierName,
+      targetLanguage,
+      isRewrite,
+      dna: chunks[0]?.metadata?.dna as DNA | undefined,
+    })
+
+    const translations: string[] = new Array(chunks.length)
+    let tokensUsed = 0
+    let requestCount = 0
+
+    const limit = pLimit(config.batchSize)
+    
+    // Process in batches with dynamic delay
+    for (let i = 0; i < chunks.length; i += config.batchSize) {
+      const batchStart = i
+      const batchEnd = Math.min(i + config.batchSize, chunks.length)
+      const batchNum = Math.floor(i / config.batchSize) + 1
+      const totalBatches = Math.ceil(chunks.length / config.batchSize)
+      
+      console.log(`Processing batch ${batchNum}/${totalBatches}`)
+
+      const batchPromises = chunks
+        .slice(batchStart, batchEnd)
+        .map((chunk, batchIndex) => {
+          const chunkIndex = batchStart + batchIndex
+          return limit(async () => {
+            const previousContext = chunkIndex > 0 ? translations[chunkIndex - 1]?.slice(-200) : undefined
+            
+            const translation = await translateChunkWithRetry({
+              content: chunk.content,
+              systemPrompt,
+              model: config.model,
+              temperature: config.temperature,
+              dna: chunk.metadata?.dna as DNA | undefined,
+              previousContext,
+              chunkIndex,
+              totalChunks: chunks.length,
+              maxRetries: config.maxRetries,
+              tierName,
+            })
+            
+            translations[chunkIndex] = translation
+            tokensUsed += chunk.tokens
+            requestCount++
+            
+            return translation
+          })
+        })
+
+      await Promise.all(batchPromises)
+
+      // Dynamic delay between batches
+      if (batchEnd < chunks.length) {
+        const progress = batchEnd / chunks.length
+        const delay = calculateDynamicDelay(config.delay, progress, tokensUsed)
+        console.log(`Waiting ${delay}ms before next batch...`)
+        await sleep(delay)
+      }
+    }
+
+    const finalTranslation = translations.join('\n\n')
+    const processingTime = Date.now() - startTime
+
+    console.log(`=== Translation Complete ===`)
+    console.log(`Processing time: ${(processingTime / 1000).toFixed(2)}s`)
+    console.log(`Tokens used: ${tokensUsed.toLocaleString()}`)
+
+    return NextResponse.json({
+      success: true,
+      original: text,
+      translated: finalTranslation,
+      targetLang,
+      model: config.model,
+      tier: tierName,
+      method: chunks.length > 1 ? 'chunked' : 'simple',
+      stats: {
+        originalLength: text.length,
+        translatedLength: finalTranslation.length,
+        processingTime,
+        chunks: chunks.length,
+        tokensProcessed: tokensUsed,
+        requestCount,
+        chunkingStrategy: summary?.strategy || 'unknown',
+        dna: generateDNA ? chunks[0]?.metadata?.dna : undefined,
+      },
+    })
+
+  } catch (error: any) {
+    console.error('Translation error:', error.message)
+
+    if (error.status === 401) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid API key' },
+        { status: 401 }
+      )
+    }
+
+    if (error.status === 429) {
+      return NextResponse.json(
+        { success: false, error: 'Rate limit exceeded. Please try again later.' },
+        { status: 429 }
+      )
+    }
+
+    if (error.code === 'context_length_exceeded') {
+      return NextResponse.json(
+        { success: false, error: 'Text too long for model. Try using a lower tier or shorter text.' },
+        { status: 400 }
+      )
+    }
+
+    return NextResponse.json(
+      { success: false, error: error.message || 'Translation failed' },
+      { status: 500 }
+    )
+  }
+}
+
+// Helper functions
+function buildSystemPrompt({
+  tier,
+  targetLanguage,
+  isRewrite,
+  dna,
+}: {
+  tier: TierName
+  targetLanguage: string
+  isRewrite: boolean
+  dna?: DNA
+}): string {
+  if (isRewrite) {
+    return `Rewrite this ${targetLanguage} text to be clearer and more natural. Maintain the original meaning and tone. Return only the rewritten text.`
+  }
+
+  const parts: string[] = [`Translate to ${targetLanguage}.`]
+
+  if (dna) {
+    if (dna.style === 'technical') {
+      parts.push('Maintain technical terminology and precision.')
+    } else if (dna.style === 'academic') {
+      parts.push('Preserve academic tone and formal language.')
+    } else if (dna.style === 'narrative') {
+      parts.push('Keep the narrative flow and storytelling elements.')
+    }
+
+    if (dna.hasCode) parts.push('Keep code blocks unchanged.')
+    if (dna.hasTable) parts.push('Preserve table formatting.')
+  }
+
+  switch (tier) {
+    case 'basic':
+      parts.push('Return only the translation.')
+      break
+    case 'standard':
+      parts.push('Maintain the original tone and style. Ensure natural flow.')
+      break
+    case 'premium':
+      parts.push(
+        'You are a professional translator. Preserve all nuances, cultural context, and ensure the translation reads naturally to native speakers. Maintain consistency in terminology throughout.'
+      )
+      break
+  }
+
+  return parts.join(' ')
+}
+
+async function translateChunkWithRetry({
+  content,
+  systemPrompt,
+  model,
+  temperature,
+  dna,
+  previousContext,
+  chunkIndex,
+  totalChunks,
+  maxRetries,
+  tierName,
+}: {
+  content: string
+  systemPrompt: string
+  model: string
+  temperature: number
+  dna?: DNA
+  previousContext?: string
+  chunkIndex: number
+  totalChunks: number
+  maxRetries: number
+  tierName: TierName
+}): Promise<string> {
+  let lastError: any
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await translateChunk({
+        content,
+        systemPrompt,
+        model,
+        temperature,
+        dna,
+        previousContext,
+        chunkIndex,
+        totalChunks,
+      })
+    } catch (error: any) {
+      lastError = error
+      
+      if (error.status === 429) {
+        if (model === 'gpt-4o' && attempt === 0) {
+          console.log(`Rate limit hit on chunk ${chunkIndex + 1}, falling back to GPT-3.5-turbo`)
+          model = 'gpt-3.5-turbo'
+          continue
+        }
+        
+        const waitMatch = error.message?.match(/try again in (\d+\.?\d*)s/)
+        const waitTime = waitMatch ? parseFloat(waitMatch[1]) * 1000 : (attempt + 1) * 5000
+        
+        console.log(`Rate limit hit, waiting ${waitTime}ms before retry ${attempt + 1}/${maxRetries}`)
+        await sleep(waitTime)
+        continue
+      }
+      
+      if (attempt < maxRetries - 1) {
+        const backoff = Math.min(1000 * Math.pow(2, attempt), 10000)
+        console.log(`Error on chunk ${chunkIndex + 1}, retrying in ${backoff}ms...`)
+        await sleep(backoff)
+      }
+    }
+  }
+  
+  throw lastError
+}
+
+async function translateChunk({
+  content,
+  systemPrompt,
+  model,
+  temperature,
+  dna,
+  previousContext,
+  chunkIndex,
+  totalChunks,
+}: {
+  content: string
+  systemPrompt: string
+  model: string
+  temperature: number
+  dna?: DNA
+  previousContext?: string
+  chunkIndex: number
+  totalChunks: number
+}): Promise<string> {
+  let userPrompt = content
+
+  if (previousContext && chunkIndex > 0) {
+    userPrompt = `[Previous context: ...${previousContext}]\n\n${content}`
+  }
+
+  if (model === 'gpt-4o' && totalChunks > 1) {
+    userPrompt += `\n\n[This is part ${chunkIndex + 1} of ${totalChunks}]`
+  }
+
+  const completion = await openai.chat.completions.create({
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    temperature,
+    max_tokens: Math.min(content.length * 3, 4000),
+  })
+
+  return completion.choices[0]?.message?.content || ''
+}

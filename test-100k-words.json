@@ -1,0 +1,8 @@
+{
+  "text": "$(python3 -c "
+words = ['The artificial intelligence revolution continues to transform industries worldwide.'] * 10000
+print(' '.join(words))
+")",
+  "targetLang": "vi",
+  "tier": "premium"
+}

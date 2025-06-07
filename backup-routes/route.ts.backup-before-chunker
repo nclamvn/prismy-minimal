@@ -1,0 +1,451 @@
+import { NextResponse } from 'next/server'
+import OpenAI from 'openai'
+import { SimpleChunkerService } from '@/lib/services/simple-chunker'
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || '',
+})
+
+const chunkerService = new SimpleChunkerService()
+
+const LANG_MAP = {
+  vi: 'Vietnamese',
+  en: 'English',
+  zh: 'Chinese (Simplified)',
+  ja: 'Japanese',
+  ko: 'Korean',
+  fr: 'French',
+  es: 'Spanish',
+  de: 'German',
+}
+
+// Tier configurations với model mới
+const TIER_CONFIG = {
+  basic: {
+    model: 'gpt-3.5-turbo',
+    maxChars: 50000,
+    maxTokensPerChunk: 500,
+    batchSize: 5,
+    delayMs: 200,
+    rateLimit: { tokensPerMin: 90000, requestsPerMin: 3500 }
+  },
+  standard: {
+    model: 'gpt-4o',
+    fallbackModel: 'gpt-3.5-turbo',
+    maxChars: 200000,
+    maxTokensPerChunk: 1000,
+    batchSize: 8,
+    delayMs: 500,
+    rateLimit: { tokensPerMin: 30000, requestsPerMin: 500 }
+  },
+  premium: {
+    model: 'gpt-4o',
+    fallbackModel: 'gpt-4o',
+    maxChars: 1000000,
+    maxTokensPerChunk: 1500,
+    batchSize: 2,
+    delayMs: 8000,
+    rateLimit: { tokensPerMin: 10000, requestsPerMin: 200 }
+  }
+}
+
+// Rate limit tracking với model mới
+const rateLimitTracker = {
+  'gpt-3.5-turbo': { tokens: 0, requests: 0, resetTime: Date.now() },
+  'gpt-4o': { tokens: 0, requests: 0, resetTime: Date.now() },
+  'gpt-4': { tokens: 0, requests: 0, resetTime: Date.now() } // Keep for compatibility
+}
+
+// Reset rate limits every minute
+function checkAndResetRateLimits(model: string) {
+  const tracker = rateLimitTracker[model]
+  const now = Date.now()
+  
+  if (now - tracker.resetTime > 60000) {
+    tracker.tokens = 0
+    tracker.requests = 0
+    tracker.resetTime = now
+  }
+}
+
+// Check if we can make a request với logic cho model mới
+function canMakeRequest(model: string, tokens: number): { allowed: boolean; waitTime?: number } {
+  checkAndResetRateLimits(model)
+  
+  const tracker = rateLimitTracker[model]
+  let config
+  
+  // Determine config based on model
+  if (model === 'gpt-3.5-turbo') {
+    config = TIER_CONFIG.basic
+  } else if (model === 'gpt-4o') {
+    config = TIER_CONFIG.standard
+  } else {
+    config = TIER_CONFIG.premium
+  }
+  
+  if (tracker.tokens + tokens > config.rateLimit.tokensPerMin * 0.9) { // 90% safety margin
+    const waitTime = 60000 - (Date.now() - tracker.resetTime)
+    return { allowed: false, waitTime }
+  }
+  
+  if (tracker.requests >= config.rateLimit.requestsPerMin * 0.9) {
+    const waitTime = 60000 - (Date.now() - tracker.resetTime)
+    return { allowed: false, waitTime }
+  }
+  
+  return { allowed: true }
+}
+
+// Update rate limit tracking
+function updateRateLimits(model: string, tokens: number) {
+  const tracker = rateLimitTracker[model]
+  tracker.tokens += tokens
+  tracker.requests += 1
+}
+
+// Translate with retry and rate limit handling
+async function translateChunkWithRetry(
+  content: string,
+  targetLanguage: string,
+  model: string,
+  chunkIndex: number,
+  totalChunks: number,
+  previousContext?: string,
+  tier: string = 'standard',
+  retries: number = 3
+): Promise<string> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      // Check rate limits before making request
+      const estimatedTokens = Math.ceil(content.length / 3)
+      const rateCheck = canMakeRequest(model, estimatedTokens)
+      
+      if (!rateCheck.allowed && rateCheck.waitTime) {
+        console.log(`Rate limit prevention: waiting ${rateCheck.waitTime}ms`)
+        await new Promise(resolve => setTimeout(resolve, rateCheck.waitTime))
+      }
+      
+      // Build system prompt based on tier and context
+      let systemPrompt = ''
+      
+      if (totalChunks > 1) {
+        systemPrompt = `You are translating part ${chunkIndex + 1} of ${totalChunks} of a document. `
+        if (previousContext && tier === 'premium') {
+          systemPrompt += `Previous context: "${previousContext.slice(-200)}..." `
+        }
+        systemPrompt += `Translate to ${targetLanguage} maintaining consistency with previous parts. `
+      } else {
+        systemPrompt = `Translate to ${targetLanguage}. `
+      }
+      
+      // Add tier-specific instructions
+      switch (tier) {
+        case 'premium':
+          systemPrompt += 'Preserve all nuances, tone, and style. Ensure natural flow for native speakers.'
+          break
+        case 'standard':
+          systemPrompt += 'Maintain the original tone and meaning.'
+          break
+        default:
+          systemPrompt += 'Provide accurate translation.'
+      }
+      
+      systemPrompt += ' Return only the translation.'
+      
+      const completion = await openai.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content }
+        ],
+        temperature: tier === 'premium' ? 0.4 : 0.3,
+        max_tokens: Math.min(content.length * 2, 4000),
+      })
+      
+      const result = completion.choices[0]?.message?.content || ''
+      
+      // Update rate limits on success
+      updateRateLimits(model, estimatedTokens)
+      
+      return result
+      
+    } catch (error: any) {
+      console.error(`Translation attempt ${attempt + 1} failed:`, error.message)
+      
+      // Handle rate limit errors
+      if (error.status === 429) {
+        // Extract wait time from error message
+        const waitMatch = error.message.match(/Please try again in (\d+\.?\d*)s/)
+        const waitTime = waitMatch ? parseFloat(waitMatch[1]) * 1000 : 10000
+        
+        // For standard/premium tier, try fallback model
+        if ((tier === 'standard' || tier === 'premium') && model === 'gpt-4o' && attempt === 0) {
+          const fallbackModel = TIER_CONFIG[tier].fallbackModel || 'gpt-3.5-turbo'
+          console.log(`GPT-4o rate limit hit, falling back to ${fallbackModel}`)
+          return translateChunkWithRetry(
+            content,
+            targetLanguage,
+            fallbackModel,
+            chunkIndex,
+            totalChunks,
+            previousContext,
+            tier,
+            retries - 1
+          )
+        }
+        
+        console.log(`Rate limit hit. Waiting ${waitTime}ms before retry ${attempt + 1}/${retries}`)
+        await new Promise(resolve => setTimeout(resolve, waitTime))
+        continue
+      }
+      
+      // For other errors, throw immediately
+      throw error
+    }
+  }
+  
+  throw new Error('Max retries exceeded')
+}
+
+export async function GET() {
+  return NextResponse.json({ 
+    message: "Prismy Translation API - Optimized",
+    hasApiKey: !!process.env.OPENAI_API_KEY,
+    supportedLanguages: Object.keys(LANG_MAP),
+    tiers: Object.keys(TIER_CONFIG),
+    features: [
+      'Smart chunking for long documents',
+      'Rate limit handling with retry',
+      'Fallback models for standard/premium tiers',
+      'Context preservation across chunks',
+      'Batch processing optimization',
+      'Model configuration: Basic (GPT-3.5-turbo), Standard (GPT-4o), Premium (GPT-4o with enhanced features)'
+    ],
+    limits: Object.entries(TIER_CONFIG).reduce((acc, [tier, config]) => {
+      acc[tier] = {
+        maxChars: config.maxChars.toLocaleString(),
+        model: config.model,
+        chunkSize: `${config.maxTokensPerChunk} tokens`,
+        batchSize: config.batchSize
+      }
+      return acc
+    }, {} as any)
+  })
+}
+
+export async function POST(request: Request) {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { success: false, error: 'Missing OpenAI API key' },
+        { status: 500 }
+      )
+    }
+
+    const body = await request.json()
+    const { 
+      text = '', 
+      targetLang = 'vi', 
+      tier = 'standard',
+      useChunking = true,
+      progressCallback = false
+    } = body
+    
+    if (!text.trim()) {
+      return NextResponse.json(
+        { success: false, error: 'No text provided' },
+        { status: 400 }
+      )
+    }
+    
+    // Validate tier
+    if (!TIER_CONFIG[tier]) {
+      return NextResponse.json(
+        { success: false, error: `Invalid tier. Choose from: ${Object.keys(TIER_CONFIG).join(', ')}` },
+        { status: 400 }
+      )
+    }
+    
+    const config = TIER_CONFIG[tier]
+    
+    // Check length limits
+    if (text.length > config.maxChars) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: `Text too long for ${tier} tier. Maximum ${config.maxChars.toLocaleString()} characters.` 
+        },
+        { status: 400 }
+      )
+    }
+    
+    const targetLanguage = LANG_MAP[targetLang] || 'Vietnamese'
+    const model = config.model
+    
+    console.log('=== Translation Request ===')
+    console.log('Text length:', text.length, 'chars')
+    console.log('Target:', targetLanguage)
+    console.log('Model:', model)
+    console.log('Tier:', tier)
+    
+    const startTime = Date.now()
+    
+    // Check if chunking needed
+    const needsChunking = useChunking && text.length > 3000
+    
+    if (!needsChunking) {
+      // Simple translation for short texts
+      console.log('Using simple translation (no chunking)')
+      
+      const translated = await translateChunkWithRetry(
+        text,
+        targetLanguage,
+        model,
+        0,
+        1,
+        undefined,
+        tier
+      )
+      
+      return NextResponse.json({
+        success: true,
+        original: text,
+        translated,
+        targetLang,
+        model,
+        tier,
+        method: 'simple',
+        stats: {
+          originalLength: text.length,
+          translatedLength: translated.length,
+          processingTime: Date.now() - startTime,
+          chunks: 1
+        }
+      })
+    }
+    
+    // Use chunking for long texts
+    console.log('=== Using Smart Chunking ===')
+    
+    // Create chunks
+    const chunks = chunkerService.chunkByParagraphs(text, config.maxTokensPerChunk)
+    console.log(`Created ${chunks.length} chunks`)
+    
+    // Log chunk info
+    chunks.forEach((chunk, i) => {
+      console.log(`Chunk ${i + 1}: ${chunk.tokens} tokens, ${chunk.content.length} chars`)
+    })
+    
+    // Translate chunks with context preservation
+    const translatedChunks: string[] = []
+    let previousContext = ''
+    const batchSize = config.batchSize
+    
+    // Process in batches
+    for (let i = 0; i < chunks.length; i += batchSize) {
+      const batch = chunks.slice(i, Math.min(i + batchSize, chunks.length))
+      const batchNum = Math.floor(i / batchSize) + 1
+      const totalBatches = Math.ceil(chunks.length / batchSize)
+      
+      console.log(`Processing batch ${batchNum}/${totalBatches} (${batch.length} chunks)`)
+      
+      // Add smart delay based on tier and progress
+      if (i > 0) {
+        const baseDelay = config.delayMs
+        const progressFactor = i / chunks.length
+        const adaptiveDelay = baseDelay * (1 + progressFactor) // Increase delay as we progress
+        
+        console.log(`Waiting ${adaptiveDelay}ms before batch ${batchNum}`)
+        await new Promise(resolve => setTimeout(resolve, adaptiveDelay))
+      }
+      
+      // Process batch
+      const batchPromises = batch.map((chunk, batchIndex) => {
+        const globalIndex = i + batchIndex
+        return translateChunkWithRetry(
+          chunk.content,
+          targetLanguage,
+          model,
+          globalIndex,
+          chunks.length,
+          previousContext,
+          tier
+        )
+      })
+      
+      try {
+        const batchResults = await Promise.all(batchPromises)
+        translatedChunks.push(...batchResults)
+        
+        // Update context with last translated chunk for premium tier
+        if (tier === 'premium' && batchResults.length > 0) {
+          previousContext = batchResults[batchResults.length - 1]
+        }
+        
+      } catch (error) {
+        console.error(`Batch ${batchNum} failed:`, error)
+        throw error
+      }
+    }
+    
+    // Join translated chunks
+    const translated = translatedChunks.join('\n\n')
+    
+    const processingTime = Date.now() - startTime
+    
+    console.log('=== Translation Complete ===')
+    console.log(`Processed ${chunks.length} chunks in ${processingTime}ms`)
+    console.log(`Original: ${text.length} chars`)
+    console.log(`Translated: ${translated.length} chars`)
+    console.log(`Average time per chunk: ${Math.round(processingTime / chunks.length)}ms`)
+    
+    return NextResponse.json({
+      success: true,
+      original: text,
+      translated,
+      targetLang,
+      model,
+      tier,
+      method: 'chunked',
+      stats: {
+        originalLength: text.length,
+        translatedLength: translated.length,
+        processingTime,
+        chunks: chunks.length,
+        avgChunkSize: Math.round(text.length / chunks.length),
+        avgTimePerChunk: Math.round(processingTime / chunks.length),
+        tokensProcessed: chunks.reduce((sum, c) => sum + c.tokens, 0)
+      }
+    })
+    
+  } catch (error: any) {
+    console.error('Translation error:', error.message)
+    
+    if (error.status === 401) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid API key' },
+        { status: 401 }
+      )
+    }
+    
+    if (error.status === 429) {
+      return NextResponse.json(
+        { success: false, error: 'Rate limit exceeded. Please try again later.' },
+        { status: 429 }
+      )
+    }
+    
+    if (error.code === 'context_length_exceeded') {
+      return NextResponse.json(
+        { success: false, error: 'Text chunk too long. Try using smaller chunks.' },
+        { status: 400 }
+      )
+    }
+    
+    return NextResponse.json({ 
+      success: false,
+      error: error.message || 'Translation failed' 
+    }, { status: 500 })
+  }
+}
