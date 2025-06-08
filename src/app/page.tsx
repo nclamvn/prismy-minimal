@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { TierSelector } from '@/components/features/TierSelector'
-import { AsyncTranslationButton } from '@/components/features/AsyncTranslation/AsyncTranslationButton';
+import { AsyncTranslationButton } from '@/components/AsyncTranslationButton'
 
 export default function Home() {
   const [input, setInput] = useState('')
@@ -295,6 +295,7 @@ export default function Home() {
       const data = await response.json()
       
       if (data.success) {
+        clearInterval(progressInterval)
         setProgress(100)
         
         setTimeout(() => {
@@ -374,20 +375,65 @@ export default function Home() {
       const uploadData = await uploadResponse.json()
       
       if (uploadData.success) {
-        setInput(uploadData.text)
-        
-        const charCount = uploadData.textLength.toLocaleString()
-        const pageEstimate = Math.ceil(uploadData.textLength / 3000)
-        
-        showToast(
-          `✅ ${uploadData.fileName} (${uploadData.fileSizeFormatted})\n` +
-          `${charCount} ${interfaceLang === 'vi' ? 'ký tự' : 'characters'} ` +
-          `(~${pageEstimate} ${interfaceLang === 'vi' ? 'trang' : pageEstimate === 1 ? 'page' : 'pages'})`
-        )
+        // Handle PDF queue response
+        if (uploadData.queued && uploadData.jobId) {
+          showToast(
+            `${interfaceLang === 'vi' ? '📄 PDF đang được xử lý...' : '📄 PDF queued for extraction...'}`
+          )
+          
+          // Poll for extraction status
+          let pollCount = 0
+          const maxPolls = 60 // 60 seconds max
+          
+          const checkExtraction = setInterval(async () => {
+            pollCount++
+            
+            try {
+              const statusRes = await fetch(`/api/extraction-status/${uploadData.jobId}`)
+              const status = await statusRes.json()
+              
+              if (status.status === 'completed') {
+                clearInterval(checkExtraction)
+                setInput(status.result.text)
+                
+                const pageCount = status.result.pageCount
+                showToast(
+                  `✅ ${uploadData.fileName} (${uploadData.fileSizeFormatted})\n` +
+                  `${interfaceLang === 'vi' ? `Đã trích xuất ${pageCount} trang` : `Extracted ${pageCount} pages`}`
+                )
+                setLoading(false)
+              } else if (status.status === 'failed') {
+                clearInterval(checkExtraction)
+                throw new Error(interfaceLang === 'vi' ? 'Trích xuất PDF thất bại' : 'PDF extraction failed')
+              } else if (pollCount >= maxPolls) {
+                clearInterval(checkExtraction)
+                throw new Error(interfaceLang === 'vi' ? 'Quá thời gian xử lý PDF' : 'PDF extraction timeout')
+              }
+            } catch (error) {
+              clearInterval(checkExtraction)
+              setError(error instanceof Error ? error.message : 'Extraction check failed')
+              setLoading(false)
+            }
+          }, 1000) // Check every second
+          
+        } else {
+          // Direct response for TXT, DOCX
+          setInput(uploadData.text)
+          
+          const charCount = uploadData.textLength.toLocaleString()
+          const pageEstimate = Math.ceil(uploadData.textLength / 3000)
+          
+          showToast(
+            `✅ ${uploadData.fileName} (${uploadData.fileSizeFormatted})\n` +
+            `${charCount} ${interfaceLang === 'vi' ? 'ký tự' : 'characters'} ` +
+            `(~${pageEstimate} ${interfaceLang === 'vi' ? 'trang' : pageEstimate === 1 ? 'page' : 'pages'})`
+          )
+          setLoading(false)
+        }
       } else {
         setInput('')
         
-        let errorMessage = uploadData.error || t.uploadFailed
+        let errorMessage = uploadData.error || (interfaceLang === 'vi' ? 'Tải lên thất bại' : 'Upload failed')
         if (uploadData.details) {
           errorMessage += '\n' + uploadData.details
         }
@@ -397,16 +443,17 @@ export default function Home() {
         
         setError(errorMessage)
         showToast(`❌ ${uploadData.error}`)
+        setLoading(false)
       }
     } catch (err) {
-      setError(t.failedToProcess)
-    } finally {
+      setError(interfaceLang === 'vi' ? 'Không thể xử lý file' : 'Failed to process file')
       setLoading(false)
+    } finally {
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
     }
-  }
+    }
 
   const handleDownload = () => {
     if (!result) return
@@ -765,54 +812,56 @@ export default function Home() {
                     </div>
                   </div>
 
-                  {/* Right side - Translate Button FIXED */}
-                  {/* Right side - Translate Button FIXED */}
-                 <button 
-                   className={`translate-btn ${loading ? 'loading' : ''}`}
-                   onClick={handleTranslate}
-                   disabled={loading || !input.trim()}
-                 >
-                   <span>{loading ? `${t.translating} ${progress}%` : t.translateNow}</span>
-                 </button>
+                  {/* Right side - Translate Buttons */}
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button 
+                      className={`translate-btn ${loading ? 'loading' : ''}`}
+                      onClick={handleTranslate}
+                      disabled={loading || !input.trim()}
+                    >
+                      <span>{loading ? `${t.translating} ${progress}%` : t.translateNow}</span>
+                    </button>
 
-                 {/* Async Translation Button */}
-                 <AsyncTranslationButton
-                   text={input}
-                   targetLang={targetLang}
-                   tier={selectedTier}
-                   onComplete={(result) => {
-                     setResult({
-                       translated: result.translatedText,
-                       model: selectedTier,
-                       success: true
-                     });
-                   }}
-                 />
+                    {/* Async Translation Button */}
+                    <AsyncTranslationButton
+                      text={input}
+                      targetLang={targetLang}
+                      tier={selectedTier}
+                      disabled={!input.trim() || loading}
+                      onTranslationComplete={(translatedText) => {
+                        setResult({
+                          translated: translatedText,
+                          model: selectedTier,
+                          success: true
+                        });
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
+          </div>
             
-            {/* Keyboard shortcut hint */}
-            <div style={{
-              marginTop: '8px',
-              fontSize: '12px',
-              color: 'var(--color-text-tertiary)',
-              textAlign: 'center'
-            }}>
-              {t.pressKey} <kbd style={{
-                padding: '2px 6px',
-                background: 'var(--color-button-secondary)',
-                borderRadius: '4px',
-                fontSize: '11px',
-                fontFamily: 'monospace'
-              }}>⌘</kbd> + <kbd style={{
-                padding: '2px 6px',
-                background: 'var(--color-button-secondary)',
-                borderRadius: '4px',
-                fontSize: '11px',
-                fontFamily: 'monospace'
-              }}>Enter</kbd> {t.toTranslate}
-            </div>
+          {/* Keyboard shortcut hint */}
+          <div style={{
+            marginTop: '8px',
+            fontSize: '12px',
+            color: 'var(--color-text-tertiary)',
+            textAlign: 'center'
+          }}>
+            {t.pressKey} <kbd style={{
+              padding: '2px 6px',
+              background: 'var(--color-button-secondary)',
+              borderRadius: '4px',
+              fontSize: '11px',
+              fontFamily: 'monospace'
+            }}>⌘</kbd> + <kbd style={{
+              padding: '2px 6px',
+              background: 'var(--color-button-secondary)',
+              borderRadius: '4px',
+              fontSize: '11px',
+              fontFamily: 'monospace'
+            }}>Enter</kbd> {t.toTranslate}
           </div>
         </div>
 
@@ -1493,7 +1542,7 @@ export default function Home() {
           border-color: var(--color-text-primary);
         }
 
-          .pill-button {
+        .pill-button {
           background: var(--color-surface);
           border: 1px solid var(--color-border);
           color: var(--color-text-primary);
@@ -1543,113 +1592,113 @@ export default function Home() {
           gap: 8px;
         }
 
-       .upload-doc-button {
-         background: var(--color-surface);
-         border: 1px dashed var(--color-border);
-         color: var(--color-text-secondary);
-         padding: 12px 20px;
-         border-radius: 16px;
-         display: flex;
-         align-items: center;
-         gap: 8px;
-         cursor: pointer;
-         transition: all 0.2s ease;
-         font-weight: 500;
-         white-space: nowrap;
-       }
+        .upload-doc-button {
+          background: var(--color-surface);
+          border: 1px dashed var(--color-border);
+          color: var(--color-text-secondary);
+          padding: 12px 20px;
+          border-radius: 16px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          font-weight: 500;
+          white-space: nowrap;
+        }
 
-       .upload-doc-button:hover {
-         background: var(--color-button-secondary);
-         border-color: var(--color-text-secondary);
-         transform: translateY(-2px);
-         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
-       }
+        .upload-doc-button:hover {
+          background: var(--color-button-secondary);
+          border-color: var(--color-text-secondary);
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+        }
 
-       @media (min-width: 769px) {
-         .nav-link {
-           display: inline-block;
-         }
-       }
+        @media (min-width: 769px) {
+          .nav-link {
+            display: inline-block;
+          }
+        }
 
-       @media (max-width: 768px) {
-         .header-content {
-           padding: 12px 16px !important;
-         }
+        @media (max-width: 768px) {
+          .header-content {
+            padding: 12px 16px !important;
+          }
 
-         .header-logo {
-           font-size: 20px !important;
-         }
+          .header-logo {
+            font-size: 20px !important;
+          }
 
-         .btn-mobile {
-           padding: 6px 12px !important;
-           font-size: 13px !important;
-         }
+          .btn-mobile {
+            padding: 6px 12px !important;
+            font-size: 13px !important;
+          }
 
-         .greeting h2 {
-           font-size: 28px !important;
-         }
+          .greeting h2 {
+            font-size: 28px !important;
+          }
 
-         .greeting p {
-           font-size: 20px !important;
-         }
+          .greeting p {
+            font-size: 20px !important;
+          }
 
-         .function-pills {
-           display: grid;
-           grid-template-columns: 1fr 1fr;
-           gap: 12px;
-         }
+          .function-pills {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+          }
 
-         .pill-button,
-         .upload-doc-button {
-           width: 100%;
-           justify-content: center;
-         }
+          .pill-button,
+          .upload-doc-button {
+            width: 100%;
+            justify-content: center;
+          }
 
-         .cards-grid {
-           grid-template-columns: 1fr !important;
-         }
+          .cards-grid {
+            grid-template-columns: 1fr !important;
+          }
 
-         .bottom-controls {
-           justify-content: space-between !important;
-           flex-wrap: wrap;
-         }
+          .bottom-controls {
+            justify-content: space-between !important;
+            flex-wrap: wrap;
+          }
 
-         .translate-btn {
-           padding: 8px 16px !important;
-           font-size: 13px !important;
-           min-width: 120px;
-         }
+          .translate-btn {
+            padding: 8px 16px !important;
+            font-size: 13px !important;
+            min-width: 120px;
+          }
 
-         .lang-info {
-           display: none;
-         }
-       }
+          .lang-info {
+            display: none;
+          }
+        }
 
-       @keyframes spin {
-         to { transform: rotate(360deg); }
-       }
-       
-       .animate-spin {
-         animation: spin 1s linear infinite;
-       }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        
+        .animate-spin {
+          animation: spin 1s linear infinite;
+        }
 
-       .input-wrapper > div > div:first-child::-webkit-scrollbar {
-         width: 4px;
-       }
+        .input-wrapper > div > div:first-child::-webkit-scrollbar {
+          width: 4px;
+        }
 
-       .input-wrapper > div > div:first-child::-webkit-scrollbar-track {
-         background: transparent;
-       }
+        .input-wrapper > div > div:first-child::-webkit-scrollbar-track {
+          background: transparent;
+        }
 
-       .input-wrapper > div > div:first-child::-webkit-scrollbar-thumb {
-         background: var(--color-border);
-         border-radius: 2px;
-       }
+        .input-wrapper > div > div:first-child::-webkit-scrollbar-thumb {
+          background: var(--color-border);
+          border-radius: 2px;
+        }
 
-       .input-wrapper > div > div:first-child::-webkit-scrollbar-thumb:hover {
-         background: var(--color-text-tertiary);
-       }
-     `}</style>
-   </div>
- )
+        .input-wrapper > div > div:first-child::-webkit-scrollbar-thumb:hover {
+          background: var(--color-text-tertiary);
+        }
+      `}</style>
+    </div>
+  )
 }

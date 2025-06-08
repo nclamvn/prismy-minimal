@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  pdf-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      - NODE_ENV=production
+      - REDIS_URL=redis://host.docker.internal:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - WORKER_TYPE=pdf-extractor
+      - CONCURRENCY=2
+      - MAX_RETRIES=3
+    network_mode: "host"
+    restart: unless-stopped
+
+  translation-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      - NODE_ENV=production
+      - REDIS_URL=redis://host.docker.internal:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - WORKER_TYPE=translation
+      - CONCURRENCY=3
+      - MAX_RETRIES=5
+    network_mode: "host"
+    restart: unless-stopped

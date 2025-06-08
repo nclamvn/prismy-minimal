@@ -1,0 +1,32 @@
+import { NextRequest, NextResponse } from 'next/server';
+
+export function checkAuth(request: NextRequest): boolean {
+  // Basic auth for now - replace with proper auth later
+  const authHeader = request.headers.get('authorization');
+  
+  if (!authHeader || !authHeader.startsWith('Basic ')) {
+    return false;
+  }
+
+  const base64Credentials = authHeader.split(' ')[1];
+  const credentials = Buffer.from(base64Credentials, 'base64').toString('ascii');
+  const [username, password] = credentials.split(':');
+
+  // Temporary credentials - CHANGE IN PRODUCTION
+  const validUsername = process.env.BULL_BOARD_USERNAME || 'admin';
+  const validPassword = process.env.BULL_BOARD_PASSWORD || 'prismy2025';
+
+  return username === validUsername && password === validPassword;
+}
+
+export function requireAuth(request: NextRequest): NextResponse | null {
+  if (!checkAuth(request)) {
+    return new NextResponse('Authentication required', {
+      status: 401,
+      headers: {
+        'WWW-Authenticate': 'Basic realm="Bull Board Admin"',
+      },
+    });
+  }
+  return null;
+}

@@ -1,15 +1,65 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
-  output   = "../generated/prisma"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"  // Dùng SQLite cho dev
   url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  apiKeys   ApiKey[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ApiKey {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  name      String   @default("Default Key")
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  
+  // Usage tracking
+  requests  Int      @default(0)
+  lastUsed  DateTime?
+  
+  // Limits
+  rateLimit Int      @default(100) // requests per hour
+  tier      String   @default("free") // free, pro, enterprise
+  
+  // Status
+  active    Boolean  @default(true)
+  expiresAt DateTime?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  apiRequests ApiRequest[]
+}
+
+model ApiRequest {
+  id        String   @id @default(cuid())
+  apiKeyId  String
+  apiKey    ApiKey   @relation(fields: [apiKeyId], references: [id])
+  
+  // Request details
+  endpoint  String
+  method    String
+  status    Int
+  duration  Int // milliseconds
+  
+  // Translation specific
+  tier      String?
+  fileSize  Int?
+  language  String?
+  
+  createdAt DateTime @default(now())
 }
