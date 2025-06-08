@@ -1,10 +1,5 @@
 # Dependencies
 node_modules/
-/.pnp
-.pnp.js
-
-# Testing
-/coverage
 
 # Next.js
 .next/
@@ -12,8 +7,8 @@ out/
 build/
 dist/
 
-# Production
-/build
+# Testing
+coverage/
 
 # Misc
 .DS_Store
@@ -23,7 +18,6 @@ dist/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
 
 # Local env files
 .env*.local
@@ -40,9 +34,9 @@ next-env.d.ts
 .vscode/
 .idea/
 
-# Cache
-.cache/
-*.cache
-
 # OS
-Thumbs.db.vercel
+Thumbs.db
+
+# Prisma
+prisma/dev.db
+prisma/dev.db-journal
