@@ -5,13 +5,20 @@ export async function parseFile(file: File): Promise<string> {
   const fileName = file.name.toLowerCase()
   
   if (fileName.endsWith('.pdf')) {
-    throw new Error('PDF support is coming soon. Please use DOCX or TXT files.')
+    try {
+      const pdf = (await import('pdf-parse')).default;
+      const data = await pdf(buffer);
+      return data.text || 'No text found in PDF';
+    } catch (error) {
+      console.error('PDF parsing error:', error);
+      throw new Error('Failed to parse PDF file');
+    }
   } else if (fileName.endsWith('.docx') || fileName.endsWith('.doc')) {
     return parseDOCX(buffer)
   } else if (fileName.endsWith('.txt')) {
     return buffer.toString('utf-8')
   } else {
-    throw new Error('Unsupported file type. Supported: DOCX, TXT')
+    throw new Error('Unsupported file type. Supported: PDF, DOCX, TXT')
   }
 }
 

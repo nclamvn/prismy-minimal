@@ -336,6 +336,11 @@ export default function Home() {
     const file = e.target.files?.[0]
     if (!file) return
 
+    if (file.name.toLowerCase().endsWith('.pdf')) {
+      setError(t.pdfNotSupported)
+      return
+    }
+
     const maxSize = 10 * 1024 * 1024
     if (file.size > maxSize) {
       setError(
@@ -644,7 +649,7 @@ export default function Home() {
                 ref={fileInputRef}
                 type="file"
                 onChange={handleFileSelect}
-                accept=".txt,.doc,.docx,.pdf"
+                accept=".txt,.doc,.docx"
                 style={{ 
                   display: 'none',
                   position: 'absolute',
@@ -766,28 +771,27 @@ export default function Home() {
                   </div>
 
                   {/* Right side - Translate Button FIXED */}
-                  {/* Right side - Translate Button FIXED */}
-                 <button 
-                   className={`translate-btn ${loading ? 'loading' : ''}`}
-                   onClick={handleTranslate}
-                   disabled={loading || !input.trim()}
-                 >
-                   <span>{loading ? `${t.translating} ${progress}%` : t.translateNow}</span>
-                 </button>
+                  <button 
+                    className={`translate-btn ${loading ? 'loading' : ''}`}
+                    onClick={handleTranslate}
+                    disabled={loading || !input.trim()}
+                  >
+                    <span>{loading ? `${t.translating} ${progress}%` : t.translateNow}</span>
+                  </button>
 
-                 {/* Async Translation Button */}
-                 <AsyncTranslationButton
-                   text={input}
-                   targetLang={targetLang}
-                   tier={selectedTier}
-                   onComplete={(result) => {
-                     setResult({
-                       translated: result.translatedText,
-                       model: selectedTier,
-                       success: true
-                     });
-                   }}
-                 />
+                  {/* Async Translation Button */}
+                  <AsyncTranslationButton
+                    text={input}
+                    targetLang={targetLang}
+                    tier={selectedTier}
+                    onComplete={(result) => {
+                      setResult({
+                        translated: result.translatedText,
+                        model: selectedTier,
+                        success: true
+                      });
+                    }}
+                  />
                 </div>
               </div>
             </div>

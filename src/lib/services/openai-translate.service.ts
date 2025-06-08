@@ -1,3 +1,5 @@
+import * as dotenv from 'dotenv';
+dotenv.config();
 import OpenAI from 'openai';
 
 export class OpenAITranslateService {

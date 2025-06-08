@@ -11,32 +11,23 @@ export async function POST(request: NextRequest) {
     }
 
     // Check file size (10MB limit)
-    if (file.size > 10 * 1024 * 1024) {
-      return NextResponse.json({ error: 'File size exceeds 10MB' }, { status: 400 })
-    }
+    // Check file size (10MB limit)
+   if (file.size > 10 * 1024 * 1024) {
+     return NextResponse.json({ error: 'File size exceeds 10MB' }, { status: 400 })
+   }
 
-    // Get file info
-    const fileInfo = getFileInfo(file)
-    
-    // Check if PDF
-    if (fileInfo.type === 'PDF') {
-      return NextResponse.json({ 
-        error: 'PDF support is coming soon!',
-        details: 'Currently we support DOCX and TXT files. You can also paste your text directly.',
-        fileName: fileInfo.name,
-        fileType: fileInfo.type
-      }, { status: 400 })
-    }
-    
-    // Check supported types
-    const supportedTypes = ['DOCX', 'DOC', 'TXT']
-    if (!supportedTypes.includes(fileInfo.type)) {
-      return NextResponse.json({ 
-        error: `Unsupported file type: ${fileInfo.type}`,
-        details: `We currently support: ${supportedTypes.join(', ')}`,
-        fileName: fileInfo.name
-      }, { status: 400 })
-    }
+   // Get file info
+   const fileInfo = getFileInfo(file)
+   
+   // Check supported types
+   const supportedTypes = ['DOCX', 'DOC', 'TXT', 'PDF']
+   if (!supportedTypes.includes(fileInfo.type)) {
+     return NextResponse.json({ 
+       error: `Unsupported file type: ${fileInfo.type}`,
+       details: `We currently support: ${supportedTypes.join(', ')}`,
+       fileName: fileInfo.name
+     }, { status: 400 })
+   }
 
     // Parse file content
     let text = ''
