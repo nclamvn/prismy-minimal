@@ -50,10 +50,21 @@ export const translationWorker = new Worker<TranslationJobData, TranslationJobRe
       const startTime = Date.now();
       const { text, targetLang, tier } = job.data;
 
+      // Validate required fields
+      if (!text || typeof text !== 'string' || text.trim().length === 0) {
+        throw new Error('No text content provided for translation');
+      }
+
+      if (!targetLang) {
+        throw new Error('No target language specified');
+      }
+
+      const validTier = tier || 'basic';
+
       const chunker = new ChunkerService();
       const translator = new OpenAITranslateService();
 
-      const chunkResult = await chunker.chunkDocument(text, tier as any);
+      const chunkResult = await chunker.chunkDocument(text, validTier as any);
       console.log('Chunk result type:', typeof chunkResult);
       console.log('Chunk result:', chunkResult);
 
@@ -70,7 +81,18 @@ export const translationWorker = new Worker<TranslationJobData, TranslationJobRe
           
           console.log(`🔄 Translating chunk ${index + 1}/${chunks.length} - Progress: ${progress}%`);
           const chunkText = typeof chunk === 'string' ? chunk : chunk.content || chunk.text || chunk;
-          const translated = await translator.translateText(chunkText, targetLang, tier as 'basic' | 'standard' | 'premium');
+          
+          // Skip empty chunks
+          if (!chunkText || chunkText.trim() === '') {
+            console.log(`⏭️ Skipping empty chunk ${index + 1}`);
+            return '';
+          }
+
+          const translated = await translator.translateText(
+            chunkText, 
+            targetLang, 
+            validTier as 'basic' | 'standard' | 'premium'
+          );
           
           // Update progress after translating
           const newProgress = Math.round(((index + 1) / chunks.length) * 100);
@@ -81,7 +103,7 @@ export const translationWorker = new Worker<TranslationJobData, TranslationJobRe
       );
 
       const result = {
-        translatedText: translatedChunks.join(' '),
+        translatedText: translatedChunks.filter(t => t).join(' '), // Filter out empty translations
         chunks: translatedChunks,
         processingTime: Date.now() - startTime,
       };

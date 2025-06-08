@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
         progress: job.progress,
         timestamp: job.timestamp,
         processedOn: job.processedOn,
-        completedOn: job.completedOn,
+        finishedOn: job.finishedOn,  // Changed from completedOn
         failedReason: job.failedReason,
       }))
     );
@@ -236,5 +236,26 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Dashboard error:', error);
     return NextResponse.json({ error: 'Failed to load dashboard' }, { status: 500 });
+  }
+}
+
+// POST to clean failed jobs
+export async function POST(request: NextRequest) {
+  const authResponse = requireAuth(request);
+  if (authResponse) return authResponse;
+
+  try {
+    const failed = await translationQueue.clean(0, 1000, 'failed');
+    const completed = await translationQueue.clean(24 * 3600 * 1000, 1000, 'completed'); // Clean completed after 24h
+    
+    return NextResponse.json({
+      cleaned: {
+        failed: failed.length,
+        completed: completed.length
+      }
+    });
+  } catch (error) {
+    console.error('Clean error:', error);
+    return NextResponse.json({ error: 'Failed to clean jobs' }, { status: 500 });
   }
 }

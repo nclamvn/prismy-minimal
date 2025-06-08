@@ -6,6 +6,12 @@ import * as Sentry from '@sentry/nextjs';
 let connection: any;
 let translationQueue: any;
 
+// Disable queue for Vercel deployment
+if (process.env.VERCEL) {
+  console.log('Running on Vercel - Queue features disabled');
+  process.env.DISABLE_QUEUE = 'true';
+}
+
 // Check if queue is disabled for production
 if (process.env.DISABLE_QUEUE === 'true') {
   console.log('Queue disabled for production environment');
@@ -25,99 +31,126 @@ if (process.env.DISABLE_QUEUE === 'true') {
     },
     getJob: async () => null,
     close: async () => {},
+    getWaitingCount: async () => 0,
+    getActiveCount: async () => 0,
+    getCompletedCount: async () => 0,
+    getFailedCount: async () => 0,
+    getDelayedCount: async () => 0,
+    getJobs: async () => [],
+    clean: async () => [],
+    on: () => {},
   };
 } else {
-  const { Queue } = require('bullmq');
-  const Redis = require('ioredis');
+  try {
+    const { Queue } = require('bullmq');
+    const Redis = require('ioredis');
 
-  // Check if we have Upstash credentials
-  const redisUrl = process.env.UPSTASH_REDIS_REST_URL;
-  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+    // Check if we have Upstash credentials
+    const redisUrl = process.env.UPSTASH_REDIS_REST_URL;
+    const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
 
-  if (redisUrl && redisToken) {
-    console.warn('⚠️ Upstash Redis detected but not compatible with BullMQ blocking commands.');
-    console.warn('⚠️ Using local Redis instead. Please install Redis locally: brew install redis');
+    if (redisUrl && redisToken) {
+      console.warn('⚠️ Upstash Redis detected but not compatible with BullMQ blocking commands.');
+      console.warn('⚠️ Using local Redis instead. Please install Redis locally: brew install redis');
+    }
+
+    // Always use local Redis for BullMQ
+    connection = new Redis({
+      host: process.env.REDIS_HOST || 'localhost',
+      port: parseInt(process.env.REDIS_PORT || '6379'),
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+    });
+
+    connection.on('error', (err: any) => {
+      console.error('Redis connection error:', err);
+      console.error('Please make sure Redis is running: brew services start redis');
+      
+      Sentry.captureException(err, {
+        tags: {
+          component: 'redis',
+          service: 'queue'
+        },
+        extra: {
+          redisHost: process.env.REDIS_HOST || 'localhost',
+          redisPort: process.env.REDIS_PORT || '6379'
+        }
+      });
+    });
+
+    connection.on('connect', () => {
+      console.log(`✅ Redis connected successfully to ${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || '6379'}`);
+      Sentry.addBreadcrumb({
+        message: 'Redis connected successfully',
+        level: 'info',
+        category: 'redis'
+      });
+    });
+
+    translationQueue = new Queue('translation', {
+      connection,
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 2000,
+        },
+        removeOnComplete: {
+          age: 3600, // 1 hour
+          count: 100
+        },
+        removeOnFail: {
+          age: 24 * 3600 // 24 hours
+        },
+      },
+    });
+
+    // Add queue event listeners for monitoring
+    translationQueue.on('completed', (job: any) => {
+      Sentry.addBreadcrumb({
+        message: `Job ${job.id} completed`,
+        level: 'info',
+        category: 'queue',
+        data: {
+          jobId: job.id,
+          tier: job.data?.tier || job.data?.config?.tier,
+          duration: job.finishedOn - job.processedOn
+        }
+      });
+    });
+
+    translationQueue.on('failed', (job: any, err: Error) => {
+      Sentry.captureException(err, {
+        tags: {
+          component: 'queue',
+          jobId: job.id,
+          tier: job.data?.tier || job.data?.config?.tier
+        },
+        extra: {
+          jobData: job.data,
+          attemptsMade: job.attemptsMade,
+          failedReason: job.failedReason
+        }
+      });
+    });
+  } catch (error) {
+    console.error('Failed to initialize queue:', error);
+    // Fallback to disabled queue
+    process.env.DISABLE_QUEUE = 'true';
+    translationQueue = {
+      add: async () => ({ id: 'dummy-job-id', data: {}, opts: {} }),
+      getJob: async () => null,
+      close: async () => {},
+      getWaitingCount: async () => 0,
+      getActiveCount: async () => 0,
+      getCompletedCount: async () => 0,
+      getFailedCount: async () => 0,
+      getDelayedCount: async () => 0,
+      getJobs: async () => [],
+      clean: async () => [],
+      on: () => {},
+    };
   }
-
-  // Always use local Redis for BullMQ
-  connection = new Redis({
-    host: 'localhost',
-    port: 6379,
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
-  });
-
-  connection.on('error', (err: any) => {
-    console.error('Redis connection error:', err);
-    console.error('Please make sure Redis is running: brew services start redis');
-    
-    Sentry.captureException(err, {
-      tags: {
-        component: 'redis',
-        service: 'queue'
-      },
-      extra: {
-        redisHost: 'localhost',
-        redisPort: 6379
-      }
-    });
-  });
-
-  connection.on('connect', () => {
-    console.log('✅ Redis connected successfully to localhost:6379');
-    Sentry.addBreadcrumb({
-      message: 'Redis connected successfully',
-      level: 'info',
-      category: 'redis'
-    });
-  });
-
-  translationQueue = new Queue('translation', {
-    connection,
-    defaultJobOptions: {
-      attempts: 3,
-      backoff: {
-        type: 'exponential',
-        delay: 2000,
-      },
-      removeOnComplete: {
-        age: 3600, // 1 hour
-        count: 100
-      },
-      removeOnFail: {
-        age: 24 * 3600 // 24 hours
-      },
-    },
-  });
-
-  // Add queue event listeners for monitoring
-  translationQueue.on('completed', (job: any) => {
-    Sentry.addBreadcrumb({
-      message: `Job ${job.id} completed`,
-      level: 'info',
-      category: 'queue',
-      data: {
-        jobId: job.id,
-        tier: job.data?.tier || job.data?.config?.tier,
-        duration: job.finishedOn - job.processedOn
-      }
-    });
-  });
-
-  translationQueue.on('failed', (job: any, err: Error) => {
-    Sentry.captureException(err, {
-      tags: {
-        component: 'queue',
-        jobId: job.id,
-        tier: job.data?.tier || job.data?.config?.tier
-      },
-      extra: {
-        jobData: job.data,
-        attemptsMade: job.attemptsMade,
-        failedReason: job.failedReason
-      }
-    });
-  });
 }
 
 export { translationQueue };
@@ -264,6 +297,10 @@ export class QueueService {
 
   async getJobStatus(jobId: string) {
     try {
+      if (!translationQueue.getJob) {
+        return null;
+      }
+      
       const job = await translationQueue.getJob(jobId);
       if (!job) return null;
       
@@ -286,6 +323,10 @@ export class QueueService {
   // Additional utility methods
   async retryJob(jobId: string): Promise<boolean> {
     try {
+      if (!translationQueue.getJob) {
+        return false;
+      }
+      
       const job = await translationQueue.getJob(jobId);
       if (!job) return false;
       
@@ -300,6 +341,10 @@ export class QueueService {
 
   async cleanFailedJobs(): Promise<number> {
     try {
+      if (!translationQueue.clean) {
+        return 0;
+      }
+      
       const failed = await translationQueue.clean(0, 'failed');
       console.log(`🧹 Cleaned ${failed.length} failed jobs`);
       return failed.length;
@@ -311,6 +356,17 @@ export class QueueService {
 
   async getQueueStats() {
     try {
+      if (!translationQueue.getWaitingCount) {
+        return {
+          waiting: 0,
+          active: 0,
+          completed: 0,
+          failed: 0,
+          delayed: 0,
+          total: 0
+        };
+      }
+      
       const [waiting, active, completed, failed, delayed] = await Promise.all([
         translationQueue.getWaitingCount(),
         translationQueue.getActiveCount(),

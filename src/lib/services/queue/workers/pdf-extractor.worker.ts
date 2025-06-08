@@ -57,16 +57,10 @@ export const pdfExtractorWorker = new Worker(
         console.log(`📤 Updating parent job ${job.data.parentJobId} with extracted text`);
       }
       
-      // Update current job data with extracted text
-      await job.update({
-        ...job.data,
-        text: pdfData.text,
-        metadata: {
-          pageCount: pdfData.numpages,
-          info: pdfData.info,
-          pdfMetadata: pdfData.metadata
-        }
-      });
+      // Note: job.update() is not available in BullMQ v5+
+      // The job data is immutable after creation
+      // Instead, we return the extracted data and handle it in the completion event
+      console.log(`📤 Extracted text from ${pdfData.numpages} pages`);
       
       // Final progress
       await job.updateProgress(100);
@@ -88,13 +82,12 @@ export const pdfExtractorWorker = new Worker(
   },
   { 
     connection,
-    defaultJobOptions: {
-      attempts: 3,
-      backoff: {
-        type: 'exponential',
-        delay: 2000,
-      },
-    }
+    // Worker options - removed defaultJobOptions as it's not valid here
+    concurrency: 1, // Process one PDF at a time to avoid memory issues
+    limiter: {
+      max: 10,
+      duration: 60000, // Max 10 PDFs per minute
+    },
   }
 );
 
