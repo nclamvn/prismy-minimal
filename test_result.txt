@@ -1,0 +1,1 @@
+{"error":"Endpoint not found","path":"/api/v1/large/download/JOB_ID_HERE","method":"GET","timestamp":"2025-06-13T16:10:18.757946","available_endpoints":{"main":["/","/health","/api/status"],"translation":["/translate","/translations"],"large_docs":["/api/v1/large/translate","/api/v1/large/status/{job_id}"],"async":["/api/v2/translate/pdf/async"],"docs":["/docs","/redoc"]}}

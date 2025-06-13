@@ -1,20 +1,9 @@
-// Mock Prisma client for tests
-export const prisma = {
-  user: {
-    findUnique: jest.fn(),
-    create: jest.fn(),
-    update: jest.fn(),
-    delete: jest.fn(),
-  },
-  apiKey: {
-    findUnique: jest.fn(),
-    create: jest.fn(),
-    update: jest.fn(),
-    delete: jest.fn(),
-  },
-  apiRequest: {
-    create: jest.fn(),
-    findMany: jest.fn(),
-  },
-  $disconnect: jest.fn(),
-};
+import { PrismaClient } from '@prisma/client'
+
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined
+}
+
+export const prisma = globalForPrisma.prisma ?? new PrismaClient()
+
+if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma

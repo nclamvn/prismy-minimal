@@ -1,0 +1,153 @@
+// hooks/useTranslation.ts
+import { useState, useRef } from 'react'
+
+type TranslationStatus = 'idle' | 'uploading' | 'processing' | 'completed' | 'error'
+type TranslationTier = 'basic' | 'standard' | 'premium'
+
+export function useTranslation() {
+  const [status, setStatus] = useState<TranslationStatus>('idle')
+  const [progress, setProgress] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+  const jobIdRef = useRef<string>()
+
+  /** Upload file and start translation job */
+  const translateFile = async (file: File, targetLang: string, tier: TranslationTier) => {
+    try {
+      setStatus('uploading')
+      setError(null)
+      setProgress(0)
+      
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('target_lang', targetLang)
+      formData.append('source_lang', 'auto')
+      formData.append('tier', tier)
+
+      const response = await fetch('/api/v1/large/translate', {
+        method: 'POST',
+        body: formData
+      })
+
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      
+      if (!data.job_id) {
+        throw new Error('No job ID returned from server')
+      }
+
+      jobIdRef.current = data.job_id
+      console.log('✅ Upload successful, job ID:', data.job_id)
+      
+      // Start polling for progress
+      pollJobStatus()
+      
+    } catch (err) {
+      console.error('❌ Upload error:', err)
+      setError(err instanceof Error ? err.message : 'Upload failed')
+      setStatus('error')
+    }
+  }
+
+  /** Poll job status until completion */
+  const pollJobStatus = () => {
+    if (!jobIdRef.current) return
+
+    setStatus('processing')
+    
+    const pollInterval = setInterval(async () => {
+      try {
+        const jobId = jobIdRef.current!
+        const response = await fetch(`/api/v1/large/status/${jobId}`)
+        
+        if (!response.ok) {
+          throw new Error(`Status check failed: ${response.statusText}`)
+        }
+
+        const statusData = await response.json()
+        console.log('📊 Job status:', statusData)
+        
+        // Update progress
+        setProgress(Number(statusData.progress) || 0)
+        
+        if (statusData.status === 'completed') {
+          clearInterval(pollInterval)
+          console.log('✅ Job completed, starting download...')
+          await downloadTranslatedFile(jobId)
+          
+        } else if (statusData.status === 'failed') {
+          clearInterval(pollInterval)
+          throw new Error(statusData.error || 'Translation failed')
+        }
+        
+      } catch (err) {
+        clearInterval(pollInterval)
+        console.error('❌ Polling error:', err)
+        setError(err instanceof Error ? err.message : 'Status check failed')
+        setStatus('error')
+      }
+    }, 2000) // Poll every 2 seconds
+  }
+
+  /** Download the actual translated file as blob */
+  const downloadTranslatedFile = async (jobId: string) => {
+    try {
+      console.log('📥 Downloading file for job:', jobId)
+      
+      const response = await fetch(`/api/v1/large/download/${jobId}`)
+      
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.statusText}`)
+      }
+
+      // ✅ CRITICAL: Get as BLOB, not JSON
+      const blob = await response.blob()
+      
+      if (blob.size === 0) {
+        throw new Error('Downloaded file is empty')
+      }
+
+      console.log('✅ File downloaded successfully, size:', blob.size, 'bytes')
+      
+      // Create download link and trigger download
+      const downloadUrl = window.URL.createObjectURL(blob)
+      const downloadLink = document.createElement('a')
+      downloadLink.href = downloadUrl
+      downloadLink.download = `translated_${jobId}.txt`
+      
+      // Trigger download
+      document.body.appendChild(downloadLink)
+      downloadLink.click()
+      document.body.removeChild(downloadLink)
+      
+      // Clean up
+      window.URL.revokeObjectURL(downloadUrl)
+      
+      setStatus('completed')
+      setProgress(100)
+      
+    } catch (err) {
+      console.error('❌ Download error:', err)
+      setError(err instanceof Error ? err.message : 'Download failed')
+      setStatus('error')
+    }
+  }
+
+  /** Reset translation state */
+  const reset = () => {
+    setStatus('idle')
+    setProgress(0)
+    setError(null)
+    jobIdRef.current = undefined
+  }
+
+  return {
+    status,
+    progress,
+    error,
+    translateFile,
+    reset
+  }
+}

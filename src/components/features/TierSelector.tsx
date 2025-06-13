@@ -1,56 +1,79 @@
-// src/components/features/TierSelector.tsx
-'use client'
+import { Zap, Award, Crown } from 'lucide-react'
+import { cn } from "@/lib/utils"
 
 interface TierSelectorProps {
   value: 'basic' | 'standard' | 'premium'
-  onChange: (tier: 'basic' | 'standard' | 'premium') => void
+  onChange: (value: 'basic' | 'standard' | 'premium') => void
   disabled?: boolean
+  labels?: {
+    basic: string
+    standard: string
+    premium: string
+  }
 }
 
-export function TierSelector({ value, onChange, disabled }: TierSelectorProps) {
+export function TierSelector({ value, onChange, disabled, labels }: TierSelectorProps) {
+  const defaultLabels = {
+    basic: 'Basic',
+    standard: 'Standard',
+    premium: 'Premium'
+  }
+  
+  const t = labels || defaultLabels
+  
   const tiers = [
-    {
-      id: 'basic',
-      name: 'Basic',
-      description: 'Fast, simple translation',
-      icon: '⚡',
-      color: 'bg-gray-100 hover:bg-gray-200'
+    { 
+      id: 'basic', 
+      name: t.basic, 
+      speed: 'Fast', 
+      quality: 'Good',
+      icon: Zap,
+      color: 'hover:border-gray-400'
     },
-    {
+    { 
       id: 'standard', 
-      name: 'Standard',
-      description: 'Balanced quality',
-      icon: '✨',
-      color: 'bg-blue-100 hover:bg-blue-200'
+      name: t.standard, 
+      speed: 'Balanced', 
+      quality: 'Better',
+      icon: Award,
+      color: 'hover:border-blue-400'
     },
-    {
-      id: 'premium',
-      name: 'Premium', 
-      description: 'Best quality, context-aware',
-      icon: '💎',
-      color: 'bg-purple-100 hover:bg-purple-200'
-    }
+    { 
+      id: 'premium', 
+      name: t.premium, 
+      speed: 'Slower', 
+      quality: 'Best',
+      icon: Crown,
+      color: 'hover:border-purple-400'
+    },
   ]
 
   return (
-    <div className="flex gap-2 mb-4">
-      {tiers.map((tier) => (
-        <button
-          key={tier.id}
-          onClick={() => onChange(tier.id as any)}
-          disabled={disabled}
-          className={`
-            flex-1 p-3 rounded-lg transition-all
-            ${value === tier.id ? 'ring-2 ring-blue-500' : ''}
-            ${tier.color}
-            ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
-          `}
-        >
-          <div className="text-2xl mb-1">{tier.icon}</div>
-          <div className="font-medium">{tier.name}</div>
-          <div className="text-xs text-gray-600">{tier.description}</div>
-        </button>
-      ))}
+    <div className="flex gap-2">
+      {tiers.map((tier) => {
+        const Icon = tier.icon
+        const isSelected = value === tier.id
+        
+        return (
+          <button
+            key={tier.id}
+            onClick={() => onChange(tier.id as any)}
+            disabled={disabled}
+            className={cn(
+              "flex-1 px-4 py-3 rounded-xl border-2 transition-all duration-200",
+              "hover:shadow-md hover:-translate-y-0.5",
+              isSelected
+                ? "border-accent bg-accent/10 text-accent"
+                : `border-border-secondary ${tier.color} text-text`,
+              disabled && "opacity-50 cursor-not-allowed hover:shadow-none hover:translate-y-0"
+            )}
+          >
+            <Icon className="w-4 h-4 mx-auto mb-2 opacity-70" />
+            <div className="font-medium">{tier.name}</div>
+            <div className="text-xs opacity-75">{tier.quality} • {tier.speed}</div>
+          </button>
+        )
+      })}
     </div>
   )
 }

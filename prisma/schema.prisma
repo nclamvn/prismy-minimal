@@ -6,7 +6,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"  // Dùng SQLite cho dev
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -14,52 +14,182 @@ model User {
   id        String   @id @default(cuid())
   email     String   @unique
   name      String?
-  apiKeys   ApiKey[]
+  password  String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  apiKeys         ApiKey[]
+  subscriptions   Subscription[]
+  payments        Payment[]
+  usageRecords    UsageRecord[]
+  usage           Usage[]
+  translationJobs TranslationJob[]
 }
 
 model ApiKey {
-  id        String   @id @default(cuid())
-  key       String   @unique
-  name      String   @default("Default Key")
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  
-  // Usage tracking
-  requests  Int      @default(0)
-  lastUsed  DateTime?
-  
-  // Limits
-  rateLimit Int      @default(100) // requests per hour
-  tier      String   @default("free") // free, pro, enterprise
-  
-  // Status
-  active    Boolean  @default(true)
-  expiresAt DateTime?
-  
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  
-  // Relations
+  id         String    @id @default(cuid())
+  key        String    @unique
+  name       String    @default("Default Key")
+  userId     String
+  requests   Int       @default(0)
+  lastUsed   DateTime?
+  lastUsedAt DateTime?
+  rateLimit  Int       @default(100)
+  tier       String    @default("free")
+  active     Boolean   @default(true)
+  isActive   Boolean   @default(true)
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id])
   apiRequests ApiRequest[]
 }
 
 model ApiRequest {
   id        String   @id @default(cuid())
   apiKeyId  String
-  apiKey    ApiKey   @relation(fields: [apiKeyId], references: [id])
-  
-  // Request details
   endpoint  String
   method    String
   status    Int
-  duration  Int // milliseconds
-  
-  // Translation specific
-  tier      String?
+  duration  Int
+  tier      String   @default("free")
   fileSize  Int?
   language  String?
-  
+  pages     Int?
   createdAt DateTime @default(now())
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+
+  @@index([apiKeyId, createdAt])
+}
+
+model Plan {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  name         String
+  priceMonthly Int
+  priceYearly  Int
+  features     Json
+  limits       Json
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  subscriptions Subscription[]
+  payments      Payment[]
+}
+
+model Subscription {
+  id                 String    @id @default(cuid())
+  userId             String
+  planId             String
+  status             String
+  interval           String
+  currentPeriodStart DateTime  @default(now())
+  currentPeriodEnd   DateTime
+  trialStart         DateTime?
+  trialEnd           DateTime?
+  canceledAt         DateTime?
+  cancelReason       String?
+  metadata           Json?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id])
+  plan     Plan      @relation(fields: [planId], references: [id])
+  payments Payment[]
+
+  @@unique([userId, planId])
+  @@index([userId])
+  @@index([status])
+}
+
+model Payment {
+  id             String    @id @default(cuid())
+  subscriptionId String?
+  userId         String
+  planId         String?
+  amount         Int
+  currency       String    @default("USD")
+  status         String
+  paymentMethod  String
+  interval       String?
+  transactionId  String?   @unique
+  gatewayId      String?
+  gatewayData    Json?
+  verifiedAt     DateTime?
+  verifiedBy     String?
+  bankRef        String?
+  bankAccount    String?
+  notes          String?
+  processedAt    DateTime?
+  paidAt         DateTime?
+  failedAt       DateTime?
+  refundedAt     DateTime?
+  metadata       Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+  user         User          @relation(fields: [userId], references: [id])
+  plan         Plan?         @relation(fields: [planId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([paymentMethod])
+  @@index([transactionId])
+}
+
+model UsageRecord {
+  id          String   @id @default(cuid())
+  userId      String
+  resource    String
+  tier        String?
+  quantity    Int
+  periodStart DateTime
+  periodEnd   DateTime
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, periodStart])
+  @@index([resource])
+}
+
+model Usage {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  amount    Int      @default(1)
+  tier      String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+}
+
+model TranslationJob {
+  id             String   @id @default(cuid())
+  userId         String
+  fileName       String
+  originalText   String
+  translatedText String
+  targetLang     String
+  tier           String
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+  downloadCount  Int      @default(0)
+  fileType       String   @default("txt")
+  metadata       Json?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([createdAt])
 }

@@ -1,79 +1,49 @@
-import { prisma } from '@/lib/prisma';
-import * as Sentry from '@sentry/nextjs';
+import { prisma } from '@/lib/prisma'
 
 export class AuthService {
-  async validateApiKey(apiKey: string) {
-    try {
-      const key = await prisma.apiKey.findUnique({
-        where: { key: apiKey },
-        include: { user: true }
-      });
+ static async verifyApiKey(key: string) {
+   const apiKey = await prisma.apiKey.findUnique({
+     where: { key },
+     include: { user: true }
+   })
 
-      if (!key || !key.isActive) {
-        return null;
-      }
+   if (!apiKey || !apiKey.active) {
+     return null
+   }
 
-      // Update last used timestamp
-      await prisma.apiKey.update({
-        where: { id: key.id },
-        data: { lastUsedAt: new Date() }
-      });
+   // Update last used
+   await prisma.apiKey.update({
+     where: { id: apiKey.id },
+     data: { 
+       lastUsed: new Date(),
+       lastUsedAt: new Date()
+     }
+   })
 
-      return key;
-    } catch (error) {
-      Sentry.captureException(error);
-      return null;
-    }
-  }
+   return apiKey
+ }
 
-  async trackApiUsage(
-    apiKeyId: string,
-    userId: string,
-    data: {
-      endpoint: string;
-      method: string;
-      responseTime: number;
-      statusCode: number;
-    }
-  ) {
-    try {
-      await prisma.apiRequest.create({
-        data: {
-          apiKeyId,
-          userId,
-          ...data
-        }
-      });
-    } catch (error) {
-      Sentry.captureException(error);
-    }
-  }
+ static async getUserFromEmail(email: string) {
+   return prisma.user.findUnique({
+     where: { email }
+   })
+ }
 
-  generateApiKey(): string {
-    const prefix = process.env.NODE_ENV === 'production' ? 'sk_live_' : 'sk_test_';
-    const randomBytes = Array.from({ length: 32 }, () => 
-      Math.random().toString(36).charAt(2)
-    ).join('');
-    return prefix + randomBytes;
-  }
-
-  async createApiKey(userId: string, name: string) {
-    const user = await prisma.user.findUnique({
-      where: { id: userId }
-    });
-
-    if (!user) {
-      throw new Error('User not found');
-    }
-
-    return prisma.apiKey.create({
-      data: {
-        key: this.generateApiKey(),
-        name,
-        userId
-      }
-    });
-  }
+ static async createApiRequest(
+   apiKeyId: string,
+   data: {
+     endpoint: string
+     method: string
+     status: number
+     duration: number
+     tier?: string
+   }
+ ) {
+   return prisma.apiRequest.create({
+     data: {
+       apiKeyId,
+       ...data
+     }
+   })
+ }
 }
-
-export const authService = new AuthService();
